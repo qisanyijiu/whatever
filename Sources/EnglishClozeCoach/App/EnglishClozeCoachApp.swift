@@ -14,7 +14,7 @@ struct EnglishClozeCoachApp: App {
     @StateObject private var store = PracticeStore()
 
     var body: some Scene {
-        WindowGroup("英语填空教练", id: "main") {
+        WindowGroup("whatever", id: "main") {
             ContentView(store: store)
                 .frame(minWidth: 940, minHeight: 620)
         }

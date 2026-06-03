@@ -35,7 +35,9 @@ struct PracticeLibrary {
     }
 
     private func loadSavedItems() throws -> [PracticeItem] {
-        let url = try applicationSupportDirectory().appendingPathComponent("PracticeItems.json")
+        let primaryURL = try applicationSupportDirectory().appendingPathComponent("PracticeItems.json")
+        let legacyURL = try legacyApplicationSupportDirectory().appendingPathComponent("PracticeItems.json")
+        let url = fileManager.fileExists(atPath: primaryURL.path) ? primaryURL : legacyURL
         guard fileManager.fileExists(atPath: url.path) else {
             return []
         }
@@ -44,6 +46,16 @@ struct PracticeLibrary {
     }
 
     private func applicationSupportDirectory() throws -> URL {
+        let baseURL = try fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return baseURL.appendingPathComponent("whatever", isDirectory: true)
+    }
+
+    private func legacyApplicationSupportDirectory() throws -> URL {
         let baseURL = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

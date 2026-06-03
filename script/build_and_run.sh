@@ -2,8 +2,8 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="EnglishClozeCoach"
-BUNDLE_ID="com.codex.EnglishClozeCoach"
+APP_NAME="whatever"
+BUNDLE_ID="com.codex.whatever"
 MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,7 +17,11 @@ INFO_PLIST="$APP_CONTENTS/Info.plist"
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 swift build
-BUILD_BINARY="$(swift build --show-bin-path)/$APP_NAME"
+BUILD_DIR="$(swift build --show-bin-path)"
+BUILD_BINARY="$BUILD_DIR/$APP_NAME"
+if [[ ! -x "$BUILD_BINARY" ]]; then
+  BUILD_BINARY="$BUILD_DIR/EnglishClozeCoach"
+fi
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS"
@@ -34,7 +38,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
-  <string>英语填空教练</string>
+  <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>

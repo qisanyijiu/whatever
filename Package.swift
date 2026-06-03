@@ -2,13 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "EnglishClozeCoach",
+    name: "whatever",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "EnglishClozeCoach",
+            name: "whatever",
             targets: ["EnglishClozeCoach"]
         )
     ],
