@@ -11,6 +11,7 @@ final class PracticeStore: ObservableObject {
     @Published var selectedItemID: PracticeItem.ID?
     @Published var answers: [String: String] = [:]
     @Published private(set) var importError: String?
+    @Published private(set) var librarySummaries: [PracticeLibrarySummary]
 
     private let library: PracticeLibrary
     private let importer: QuestionImporter
@@ -23,6 +24,7 @@ final class PracticeStore: ObservableObject {
         self.importer = importer
         let loadedItems = library.loadItems()
         self.items = loadedItems
+        self.librarySummaries = library.summaries()
         self.selectedItemID = loadedItems.first?.id
     }
 
@@ -71,6 +73,12 @@ final class PracticeStore: ObservableObject {
         return answer == normalized(blank.answer) ? .correct : .incorrect
     }
 
+    func isCompleted(_ item: PracticeItem) -> Bool {
+        !item.blanks.isEmpty && item.blanks.allSatisfy { blank in
+            answerState(for: blank) == .correct
+        }
+    }
+
     func answerText(for blank: ClozeBlank) -> String {
         answers[blank.id] ?? ""
     }
@@ -92,6 +100,10 @@ final class PracticeStore: ObservableObject {
         answers = updatedAnswers
     }
 
+    func clearAnswers() {
+        answers = [:]
+    }
+
     func advance() {
         guard !items.isEmpty else {
             return
@@ -108,6 +120,10 @@ final class PracticeStore: ObservableObject {
         selectedItemID = items[previousIndex].id
     }
 
+    func refreshLibrarySummaries() {
+        librarySummaries = library.summaries()
+    }
+
     private func normalized(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,6 +133,7 @@ final class PracticeStore: ObservableObject {
     private func saveItems() {
         do {
             try library.save(items)
+            refreshLibrarySummaries()
         } catch {
             importError = "题目已导入，但保存失败：\(error.localizedDescription)"
         }

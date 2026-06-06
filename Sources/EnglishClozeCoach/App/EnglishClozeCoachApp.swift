@@ -12,11 +12,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct EnglishClozeCoachApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = PracticeStore()
+    @StateObject private var sessionStore = UserSessionStore()
+    @StateObject private var studyStore = StudyStore()
 
     var body: some Scene {
         WindowGroup("whatever", id: "main") {
-            ContentView(store: store)
+            Group {
+                if sessionStore.currentUser != nil {
+                    ContentView(
+                        store: store,
+                        sessionStore: sessionStore,
+                        studyStore: studyStore
+                    )
+                    .id(sessionStore.currentUser?.id)
+                } else {
+                    AuthView(sessionStore: sessionStore)
+                }
+            }
                 .frame(minWidth: 940, minHeight: 620)
+                .onAppear {
+                    syncUserState()
+                }
+                .onChange(of: sessionStore.currentUser?.id) {
+                    syncUserState()
+                }
         }
         .commands {
             CommandGroup(after: .newItem) {
@@ -24,20 +43,30 @@ struct EnglishClozeCoachApp: App {
                     store.goBack()
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [.command])
-                .disabled(!store.canGoBack)
+                .disabled(sessionStore.currentUser == nil || !store.canGoBack)
 
                 Button("下一题") {
                     store.advance()
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [.command])
-                .disabled(!store.canAdvance)
+                .disabled(sessionStore.currentUser == nil || !store.canAdvance)
 
                 Button("重置当前题") {
                     store.resetCurrentAnswers()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(store.selectedItem == nil)
+                .disabled(sessionStore.currentUser == nil || store.selectedItem == nil)
             }
+        }
+    }
+
+    private func syncUserState() {
+        store.clearAnswers()
+
+        if let user = sessionStore.currentUser {
+            studyStore.load(for: user)
+        } else {
+            studyStore.clear()
         }
     }
 }

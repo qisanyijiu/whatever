@@ -18,6 +18,39 @@ struct PracticeLibrary {
         return loadSeedItems()
     }
 
+    func summaries() -> [PracticeLibrarySummary] {
+        let seedItems = loadSeedItems()
+        let savedItems = try? loadSavedItems()
+        let hasSavedItems = savedItems?.isEmpty == false
+
+        var summaries: [PracticeLibrarySummary] = []
+        if !seedItems.isEmpty {
+            summaries.append(
+                PracticeLibrarySummary(
+                    id: "seed",
+                    name: "内置题库",
+                    itemCount: seedItems.count,
+                    detail: "应用内置 JSON 资源",
+                    isActive: !hasSavedItems
+                )
+            )
+        }
+
+        if let savedItems, !savedItems.isEmpty {
+            summaries.append(
+                PracticeLibrarySummary(
+                    id: "saved",
+                    name: "本机保存题库",
+                    itemCount: savedItems.count,
+                    detail: "macOS Application Support",
+                    isActive: true
+                )
+            )
+        }
+
+        return summaries
+    }
+
     func save(_ items: [PracticeItem]) throws {
         let directory = try applicationSupportDirectory()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)

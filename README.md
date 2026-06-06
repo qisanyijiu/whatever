@@ -13,6 +13,8 @@ with cloze exercises.
 - Download a TED talk transcript from a TED URL and generate exercises.
 - Download a public subtitle/script URL (`.srt`, `.vtt`, `.txt`, or readable
   text page) and generate exercises.
+- Local user creation and login.
+- Per-user completion progress, recent history, and mistake tracking.
 - Imported exercises are saved locally and restored on the next launch.
 
 ## Run
@@ -60,6 +62,13 @@ Imported questions are saved under macOS Application Support:
 
 ```text
 ~/Library/Application Support/whatever/PracticeItems.json
+```
+
+Local users and study records are saved under:
+
+```text
+~/Library/Application Support/whatever/Users.json
+~/Library/Application Support/whatever/Users/<user-id>/StudyData.json
 ```
 
 For compatibility, the app can still read older saved data from:
