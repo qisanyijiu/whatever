@@ -11,51 +11,60 @@ struct PracticeLibrary {
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
-    func loadItems() -> [PracticeItem] {
-        if let savedItems = try? loadSavedItems(), !savedItems.isEmpty {
-            return savedItems
-        }
-        return loadSeedItems()
-    }
-
-    func summaries() -> [PracticeLibrarySummary] {
-        let seedItems = loadSeedItems()
-        let savedItems = try? loadSavedItems()
-        let hasSavedItems = savedItems?.isEmpty == false
-
-        var summaries: [PracticeLibrarySummary] = []
-        if !seedItems.isEmpty {
-            summaries.append(
-                PracticeLibrarySummary(
-                    id: "seed",
-                    name: "内置题库",
-                    itemCount: seedItems.count,
-                    detail: "应用内置 JSON 资源",
-                    isActive: !hasSavedItems
-                )
-            )
+    func loadDecks() -> [PracticeDeck] {
+        if let savedDecks = try? loadSavedDecks(), !savedDecks.isEmpty {
+            return savedDecks
         }
 
-        if let savedItems, !savedItems.isEmpty {
-            summaries.append(
-                PracticeLibrarySummary(
-                    id: "saved",
+        if let legacyItems = try? loadLegacySavedItems(), !legacyItems.isEmpty {
+            return seedDecks() + [
+                PracticeDeck(
+                    id: "legacy-saved",
                     name: "本机保存题库",
-                    itemCount: savedItems.count,
-                    detail: "macOS Application Support",
-                    isActive: true
+                    source: "旧版导入数据",
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    items: legacyItems
                 )
-            )
+            ]
         }
 
-        return summaries
+        return seedDecks()
     }
 
-    func save(_ items: [PracticeItem]) throws {
+    func save(_ decks: [PracticeDeck]) throws {
         let directory = try applicationSupportDirectory()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try encoder.encode(items)
-        try data.write(to: directory.appendingPathComponent("PracticeItems.json"), options: .atomic)
+        let data = try encoder.encode(decks)
+        try data.write(to: directory.appendingPathComponent("Decks.json"), options: .atomic)
+    }
+
+    private func loadSavedDecks() throws -> [PracticeDeck] {
+        let url = try applicationSupportDirectory().appendingPathComponent("Decks.json")
+        guard fileManager.fileExists(atPath: url.path) else {
+            return []
+        }
+
+        let data = try Data(contentsOf: url)
+        return try decoder.decode([PracticeDeck].self, from: data)
+    }
+
+    private func seedDecks() -> [PracticeDeck] {
+        let items = loadSeedItems()
+        guard !items.isEmpty else {
+            return []
+        }
+
+        return [
+            PracticeDeck(
+                id: "seed",
+                name: "内置题库",
+                source: "应用内置 JSON 资源",
+                createdAt: Date(timeIntervalSince1970: 0),
+                updatedAt: Date(timeIntervalSince1970: 0),
+                items: items
+            )
+        ]
     }
 
     private func loadSeedItems() -> [PracticeItem] {
@@ -67,13 +76,14 @@ struct PracticeLibrary {
         return items
     }
 
-    private func loadSavedItems() throws -> [PracticeItem] {
+    private func loadLegacySavedItems() throws -> [PracticeItem] {
         let primaryURL = try applicationSupportDirectory().appendingPathComponent("PracticeItems.json")
         let legacyURL = try legacyApplicationSupportDirectory().appendingPathComponent("PracticeItems.json")
         let url = fileManager.fileExists(atPath: primaryURL.path) ? primaryURL : legacyURL
         guard fileManager.fileExists(atPath: url.path) else {
             return []
         }
+
         let data = try Data(contentsOf: url)
         return try decoder.decode([PracticeItem].self, from: data)
     }

@@ -5,11 +5,14 @@ struct ContentView: View {
         case practice
         case libraries
         case records
+        case ai
+        case dictation
     }
 
     @ObservedObject var store: PracticeStore
     @ObservedObject var sessionStore: UserSessionStore
     @ObservedObject var studyStore: StudyStore
+    @ObservedObject var aiStore: AIProviderStore
     @State private var isImporting = false
     @State private var page: Page = .practice
     @State private var celebrationItemID: PracticeItem.ID?
@@ -17,6 +20,12 @@ struct ContentView: View {
     @State private var celebrationTask: Task<Void, Never>?
     @State private var recordedMistakeBlankIDs = Set<String>()
     @State private var attemptMistakesByItemID: [PracticeItem.ID: Set<ClozeBlank.ID>] = [:]
+    @State private var explanationText: String?
+    @State private var isExplaining = false
+    @State private var explanationTask: Task<Void, Never>?
+
+    private let speechService = SpeechService()
+    private let aiTextService = AITextService()
 
     private var isCelebrating: Bool {
         celebrationItemID != nil
@@ -25,16 +34,29 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if page == .libraries {
-                LibraryOverviewView(store: store)
+                LibraryOverviewView(store: store, studyStore: studyStore)
                     .transition(.opacity)
             } else if page == .records {
-                StudyDashboardView(studyStore: studyStore, totalItemCount: store.items.count)
+                StudyDashboardView(studyStore: studyStore, practiceStore: store) {
+                    page = .practice
+                }
+                    .transition(.opacity)
+            } else if page == .ai {
+                AISettingsView(aiStore: aiStore)
+                    .transition(.opacity)
+            } else if page == .dictation, let item = store.selectedItem {
+                DictationPracticeView(item: item, speechService: speechService)
                     .transition(.opacity)
             } else if isCelebrating {
                 CelebrationView()
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else if let item = store.selectedItem {
-                PracticeDetailView(item: item, store: store)
+                PracticeDetailView(
+                    item: item,
+                    store: store,
+                    explanation: explanationText,
+                    isExplaining: isExplaining
+                )
             } else {
                 Text("待导入")
                     .font(.system(size: 40, weight: .semibold))
@@ -48,17 +70,23 @@ struct ContentView: View {
         .onChange(of: store.answers) {
             recordMistakesIfNeeded()
             startCelebrationIfNeeded()
+            clearExplanation()
         }
         .onChange(of: store.selectedItemID) {
             recordedMistakeBlankIDs.removeAll()
+            clearExplanation()
         }
         .onChange(of: page) {
             if page == .libraries {
-                store.refreshLibrarySummaries()
+                store.refreshLibrarySummaries(studyData: studyStore.data)
+            }
+            if page != .practice {
+                clearExplanation()
             }
         }
         .onDisappear {
             celebrationTask?.cancel()
+            explanationTask?.cancel()
         }
         .toolbar {
             ToolbarItemGroup {
@@ -66,10 +94,19 @@ struct ContentView: View {
                     Text("练习").tag(Page.practice)
                     Text("题库").tag(Page.libraries)
                     Text("记录").tag(Page.records)
+                    Text("AI").tag(Page.ai)
                 }
                 .pickerStyle(.segmented)
                 .disabled(isCelebrating)
                 .help("切换页面")
+
+                Button {
+                    page = .dictation
+                } label: {
+                    Label("听写", systemImage: "waveform")
+                }
+                .disabled(isCelebrating || store.selectedItem == nil)
+                .help("当前题听写/跟读")
 
                 Button {
                     isImporting = true
@@ -78,6 +115,39 @@ struct ContentView: View {
                 }
                 .disabled(isCelebrating)
                 .help("导入英文内容")
+
+                Button {
+                    store.returnToSelectedDeck()
+                    page = .practice
+                } label: {
+                    Label("当前题库", systemImage: "rectangle.stack")
+                }
+                .disabled(isCelebrating)
+                .help("返回当前题库练习")
+
+                Button {
+                    if let item = store.selectedItem {
+                        speechService.speak(item.targetEnglish)
+                    }
+                } label: {
+                    Label("朗读", systemImage: "speaker.wave.2")
+                }
+                .disabled(page != .practice || isCelebrating || store.selectedItem == nil)
+                .help("朗读当前英文")
+
+                Button {
+                    explainSelectedItem()
+                } label: {
+                    if isExplaining {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("解释中")
+                    } else {
+                        Label("解释", systemImage: "lightbulb")
+                    }
+                }
+                .disabled(page != .practice || isCelebrating || store.selectedItem == nil || isExplaining)
+                .help("查看当前题解释")
 
                 Button {
                     store.goBack()
@@ -113,7 +183,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $isImporting) {
-            ImportView(store: store)
+            ImportView(store: store, aiStore: aiStore)
         }
     }
 
@@ -135,6 +205,7 @@ struct ContentView: View {
 
         let wrongBlankCount = attemptMistakesByItemID[item.id]?.count ?? 0
         studyStore.recordCompletion(item: item, wrongBlankCount: wrongBlankCount)
+        store.refreshLibrarySummaries(studyData: studyStore.data)
         attemptMistakesByItemID[item.id] = []
         celebratedItemIDs.insert(item.id)
         celebrationItemID = item.id
@@ -178,6 +249,7 @@ struct ContentView: View {
             recordedMistakeBlankIDs.insert(key)
             attemptMistakesByItemID[item.id, default: []].insert(blank.id)
             studyStore.recordMistake(item: item, blank: blank, wrongAnswer: wrongAnswer)
+            store.refreshLibrarySummaries(studyData: studyStore.data)
         }
     }
 
@@ -185,5 +257,54 @@ struct ContentView: View {
         let normalizedWrongAnswer = wrongAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedExpectedAnswer = expectedAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         return !normalizedWrongAnswer.isEmpty && normalizedWrongAnswer.count >= normalizedExpectedAnswer.count
+    }
+
+    private func explainSelectedItem() {
+        guard let item = store.selectedItem else {
+            return
+        }
+
+        let answers = store.answers
+        guard let provider = aiStore.activeProvider, provider.isReady else {
+            explanationText = store.explanationForSelectedItem()
+            return
+        }
+
+        explanationTask?.cancel()
+        isExplaining = true
+        explanationText = nil
+        explanationTask = Task {
+            do {
+                let explanation = try await aiTextService.explainAnswer(for: item, answers: answers, using: provider)
+                await MainActor.run {
+                    guard store.selectedItemID == item.id else {
+                        return
+                    }
+                    explanationText = explanation
+                    isExplaining = false
+                    explanationTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    guard !Task.isCancelled else {
+                        return
+                    }
+                    guard store.selectedItemID == item.id else {
+                        return
+                    }
+                    let fallback = store.explanationForSelectedItem() ?? "暂无解释。"
+                    explanationText = "### AI 解释失败\n\(error.localizedDescription)\n\n\(fallback)"
+                    isExplaining = false
+                    explanationTask = nil
+                }
+            }
+        }
+    }
+
+    private func clearExplanation() {
+        explanationTask?.cancel()
+        explanationTask = nil
+        explanationText = nil
+        isExplaining = false
     }
 }

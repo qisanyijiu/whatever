@@ -80,84 +80,112 @@ func renderIcon(pixels: Int) -> NSBitmapImageRep {
     NSColor.clear.setFill()
     rect.fill()
 
-    drawRoundedBackground(in: rect, scale: scale)
-    drawGlyphs(in: rect, scale: scale)
-    drawBlankLines(scale: scale)
+    drawWhiteBackground(in: rect, scale: scale)
+    drawCreamBear(scale: scale)
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
 }
 
-func drawRoundedBackground(in rect: NSRect, scale: CGFloat) {
+func drawWhiteBackground(in rect: NSRect, scale: CGFloat) {
     let inset = 48 * scale
     let iconRect = rect.insetBy(dx: inset, dy: inset)
     let radius = 218 * scale
     let backgroundPath = NSBezierPath(roundedRect: iconRect, xRadius: radius, yRadius: radius)
 
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
-    shadow.shadowBlurRadius = 28 * scale
-    shadow.shadowOffset = NSSize(width: 0, height: -12 * scale)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
+    shadow.shadowBlurRadius = 30 * scale
+    shadow.shadowOffset = NSSize(width: 0, height: -10 * scale)
     shadow.set()
 
     let gradient = NSGradient(colors: [
-        NSColor(red: 0.055, green: 0.067, blue: 0.09, alpha: 1),
-        NSColor(red: 0.10, green: 0.13, blue: 0.17, alpha: 1)
+        NSColor(red: 1.0, green: 1.0, blue: 0.985, alpha: 1),
+        NSColor(red: 0.985, green: 0.975, blue: 0.94, alpha: 1)
     ])!
-    gradient.draw(in: backgroundPath, angle: 130)
+    gradient.draw(in: backgroundPath, angle: 90)
 
     NSShadow().set()
 
-    let glossRect = NSRect(x: 160 * scale, y: 620 * scale, width: 704 * scale, height: 190 * scale)
-    let glossPath = NSBezierPath(roundedRect: glossRect, xRadius: 95 * scale, yRadius: 95 * scale)
-    NSColor.white.withAlphaComponent(0.045).setFill()
-    glossPath.fill()
+    let innerPath = NSBezierPath(roundedRect: iconRect.insetBy(dx: 14 * scale, dy: 14 * scale), xRadius: 204 * scale, yRadius: 204 * scale)
+    NSColor.white.withAlphaComponent(0.62).setStroke()
+    innerPath.lineWidth = 5 * scale
+    innerPath.stroke()
 }
 
-func drawGlyphs(in rect: NSRect, scale: CGFloat) {
-    let chineseFont = NSFont.systemFont(ofSize: 212 * scale, weight: .semibold)
-    let englishFont = NSFont.systemFont(ofSize: 386 * scale, weight: .semibold)
+func drawCreamBear(scale: CGFloat) {
+    let cream = NSColor(red: 0.95, green: 0.82, blue: 0.58, alpha: 1)
+    let creamLight = NSColor(red: 1.0, green: 0.90, blue: 0.70, alpha: 1)
+    let creamDark = NSColor(red: 0.78, green: 0.58, blue: 0.34, alpha: 1)
+    let muzzle = NSColor(red: 1.0, green: 0.94, blue: 0.80, alpha: 1)
+    let blush = NSColor(red: 1.0, green: 0.63, blue: 0.62, alpha: 0.58)
+    let ink = NSColor(red: 0.20, green: 0.13, blue: 0.08, alpha: 1)
 
-    drawText(
-        "中",
-        font: chineseFont,
-        color: NSColor(red: 0.22, green: 0.84, blue: 0.61, alpha: 1),
-        in: NSRect(x: 236 * scale, y: 462 * scale, width: 240 * scale, height: 250 * scale)
+    let bearShadow = NSShadow()
+    bearShadow.shadowColor = NSColor(red: 0.45, green: 0.30, blue: 0.12, alpha: 0.18)
+    bearShadow.shadowBlurRadius = 24 * scale
+    bearShadow.shadowOffset = NSSize(width: 0, height: -10 * scale)
+    bearShadow.set()
+
+    fillOval(x: 278, y: 160, width: 468, height: 384, color: creamLight, scale: scale)
+    fillOval(x: 194, y: 578, width: 246, height: 246, color: cream, scale: scale)
+    fillOval(x: 584, y: 578, width: 246, height: 246, color: cream, scale: scale)
+    fillOval(x: 198, y: 292, width: 628, height: 544, color: cream, scale: scale)
+
+    NSShadow().set()
+
+    fillOval(x: 252, y: 630, width: 128, height: 128, color: muzzle, scale: scale)
+    fillOval(x: 644, y: 630, width: 128, height: 128, color: muzzle, scale: scale)
+    fillOval(x: 354, y: 366, width: 316, height: 204, color: muzzle, scale: scale)
+    fillOval(x: 300, y: 454, width: 84, height: 58, color: blush, scale: scale)
+    fillOval(x: 640, y: 454, width: 84, height: 58, color: blush, scale: scale)
+
+    fillOval(x: 374, y: 552, width: 52, height: 62, color: ink, scale: scale)
+    fillOval(x: 598, y: 552, width: 52, height: 62, color: ink, scale: scale)
+    fillOval(x: 492, y: 488, width: 40, height: 32, color: ink, scale: scale)
+
+    strokeSmile(color: ink, scale: scale)
+
+    fillOval(x: 344, y: 190, width: 132, height: 118, color: cream, scale: scale)
+    fillOval(x: 548, y: 190, width: 132, height: 118, color: cream, scale: scale)
+
+    strokeOval(x: 198, y: 292, width: 628, height: 544, color: creamDark.withAlphaComponent(0.26), lineWidth: 10, scale: scale)
+}
+
+func fillOval(x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, color: NSColor, scale: CGFloat) {
+    let path = NSBezierPath(ovalIn: NSRect(x: x * scale, y: y * scale, width: width * scale, height: height * scale))
+    color.setFill()
+    path.fill()
+}
+
+func strokeOval(x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, color: NSColor, lineWidth: CGFloat, scale: CGFloat) {
+    let path = NSBezierPath(ovalIn: NSRect(x: x * scale, y: y * scale, width: width * scale, height: height * scale))
+    color.setStroke()
+    path.lineWidth = lineWidth * scale
+    path.stroke()
+}
+
+func strokeSmile(color: NSColor, scale: CGFloat) {
+    let path = NSBezierPath()
+    path.move(to: NSPoint(x: 512 * scale, y: 486 * scale))
+    path.line(to: NSPoint(x: 512 * scale, y: 460 * scale))
+    path.move(to: NSPoint(x: 512 * scale, y: 460 * scale))
+    path.curve(
+        to: NSPoint(x: 458 * scale, y: 458 * scale),
+        controlPoint1: NSPoint(x: 498 * scale, y: 438 * scale),
+        controlPoint2: NSPoint(x: 474 * scale, y: 438 * scale)
     )
-
-    drawText(
-        "A",
-        font: englishFont,
-        color: NSColor(red: 0.95, green: 0.97, blue: 1.0, alpha: 1),
-        in: NSRect(x: 418 * scale, y: 328 * scale, width: 330 * scale, height: 440 * scale)
+    path.move(to: NSPoint(x: 512 * scale, y: 460 * scale))
+    path.curve(
+        to: NSPoint(x: 566 * scale, y: 458 * scale),
+        controlPoint1: NSPoint(x: 526 * scale, y: 438 * scale),
+        controlPoint2: NSPoint(x: 550 * scale, y: 438 * scale)
     )
-}
-
-func drawText(_ text: String, font: NSFont, color: NSColor, in rect: NSRect) {
-    let paragraphStyle = NSMutableParagraphStyle()
-    paragraphStyle.alignment = .center
-
-    let attributes: [NSAttributedString.Key: Any] = [
-        .font: font,
-        .foregroundColor: color,
-        .paragraphStyle: paragraphStyle
-    ]
-    text.draw(in: rect, withAttributes: attributes)
-}
-
-func drawBlankLines(scale: CGFloat) {
-    let lines: [(CGFloat, CGFloat, NSColor)] = [
-        (276, 268, NSColor(red: 0.22, green: 0.84, blue: 0.61, alpha: 1)),
-        (430, 268, NSColor(red: 0.38, green: 0.65, blue: 0.98, alpha: 1)),
-        (584, 268, NSColor(red: 0.73, green: 0.77, blue: 0.83, alpha: 1))
-    ]
-
-    for line in lines {
-        let rect = NSRect(x: line.0 * scale, y: line.1 * scale, width: 118 * scale, height: 18 * scale)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 9 * scale, yRadius: 9 * scale)
-        line.2.setFill()
-        path.fill()
-    }
+    color.setStroke()
+    path.lineWidth = 12 * scale
+    path.lineCapStyle = .round
+    path.lineJoinStyle = .round
+    path.stroke()
 }
 
 func writePNG(_ rep: NSBitmapImageRep, to url: URL) throws {

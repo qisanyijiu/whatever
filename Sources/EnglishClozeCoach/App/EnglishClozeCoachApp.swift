@@ -14,6 +14,7 @@ struct EnglishClozeCoachApp: App {
     @StateObject private var store = PracticeStore()
     @StateObject private var sessionStore = UserSessionStore()
     @StateObject private var studyStore = StudyStore()
+    @StateObject private var aiStore = AIProviderStore()
 
     var body: some Scene {
         WindowGroup("whatever", id: "main") {
@@ -22,7 +23,8 @@ struct EnglishClozeCoachApp: App {
                     ContentView(
                         store: store,
                         sessionStore: sessionStore,
-                        studyStore: studyStore
+                        studyStore: studyStore,
+                        aiStore: aiStore
                     )
                     .id(sessionStore.currentUser?.id)
                 } else {

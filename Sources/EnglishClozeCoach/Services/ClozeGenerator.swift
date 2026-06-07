@@ -41,8 +41,50 @@ struct ClozeGenerator {
                 segments.append(.text(nsSentence.substring(with: textRange)))
             }
 
-            segments.append(.blank(ClozeBlank(id: "\(itemID)-blank-\(index)", answer: word.text)))
+            segments.append(.blank(ClozeBlank(id: "\(itemID)-blank-\(index + 1)", answer: word.text)))
             cursor = word.range.location + word.range.length
+        }
+
+        if cursor < nsSentence.length {
+            segments.append(.text(nsSentence.substring(from: cursor)))
+        }
+
+        return segments
+    }
+
+    func segments(from sentence: String, itemID: String, blankAnswers: [String]) -> [ClozeSegment] {
+        let nsSentence = sentence as NSString
+        let matches = blankAnswers.compactMap { answer -> WordMatch? in
+            let pattern = #"\b\#(NSRegularExpression.escapedPattern(for: answer))\b"#
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: sentence, range: NSRange(location: 0, length: nsSentence.length)) else {
+                return nil
+            }
+
+            let text = nsSentence.substring(with: match.range)
+            return WordMatch(
+                range: match.range,
+                text: text,
+                lowercasedText: text.lowercased(),
+                score: text.count
+            )
+        }
+        .sorted { $0.range.location < $1.range.location }
+
+        guard !matches.isEmpty else {
+            return segments(from: sentence, itemID: itemID)
+        }
+
+        var cursor = 0
+        var segments: [ClozeSegment] = []
+        for (index, match) in matches.enumerated() where match.range.location >= cursor {
+            if match.range.location > cursor {
+                let textRange = NSRange(location: cursor, length: match.range.location - cursor)
+                segments.append(.text(nsSentence.substring(with: textRange)))
+            }
+
+            segments.append(.blank(ClozeBlank(id: "\(itemID)-blank-\(index + 1)", answer: match.text)))
+            cursor = match.range.location + match.range.length
         }
 
         if cursor < nsSentence.length {

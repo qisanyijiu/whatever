@@ -2,21 +2,30 @@ import SwiftUI
 
 struct StudyDashboardView: View {
     @ObservedObject var studyStore: StudyStore
-    let totalItemCount: Int
+    @ObservedObject var practiceStore: PracticeStore
+    let onStartPractice: () -> Void
 
     private var progressText: String {
-        "\(studyStore.completedCount) / \(totalItemCount) 题"
+        "\(studyStore.completedCount) / \(practiceStore.allItems.count) 题"
     }
 
     private var progressValue: Double {
-        guard totalItemCount > 0 else {
+        guard !practiceStore.allItems.isEmpty else {
             return 0
         }
-        return Double(studyStore.completedCount) / Double(totalItemCount)
+        return Double(studyStore.completedCount) / Double(practiceStore.allItems.count)
+    }
+
+    private var dueItems: [PracticeItem] {
+        studyStore.dueItems(from: practiceStore.allItems)
+    }
+
+    private var mistakeItems: [PracticeItem] {
+        studyStore.mistakeItems(from: practiceStore.allItems)
     }
 
     var body: some View {
-        VStack(spacing: 40) {
+        VStack(spacing: 34) {
             VStack(spacing: 12) {
                 Text("记录")
                     .font(.system(size: 42, weight: .semibold))
@@ -28,9 +37,60 @@ struct StudyDashboardView: View {
 
                 ProgressView(value: progressValue)
                     .frame(width: 360)
+
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("今日目标")
+                        Spacer()
+                        Text("\(studyStore.todayCompletedCount) / \(studyStore.data.dailyGoal)")
+                            .monospacedDigit()
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                    ProgressView(value: studyStore.dailyGoalProgress)
+                }
+                .frame(width: 360)
+            }
+
+            HStack(spacing: 36) {
+                MetricBlock(title: "今日完成", value: "\(studyStore.todayCompletedCount)")
+                MetricBlock(title: "今日复习", value: "\(dueItems.count)")
+                MetricBlock(title: "连续学习", value: "\(studyStore.currentStreak) 天")
+                MetricBlock(title: "易错题", value: "\(mistakeItems.count)")
+            }
+
+            HStack(spacing: 14) {
+                Stepper("每日目标 \(studyStore.data.dailyGoal) 题", value: dailyGoalBinding, in: 1...200)
+                    .frame(width: 190)
+
+                Toggle("每日提醒", isOn: reminderEnabledBinding)
+                    .toggleStyle(.checkbox)
+
+                DatePicker("时间", selection: reminderTimeBinding, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .disabled(!studyStore.data.reminderEnabled)
+                    .frame(width: 96)
+
+                Button {
+                    practiceStore.startCustomPractice(items: dueItems, title: "今日复习")
+                    onStartPractice()
+                } label: {
+                    Label("练今日复习", systemImage: "calendar.badge.clock")
+                }
+                .disabled(dueItems.isEmpty)
+
+                Button {
+                    practiceStore.startCustomPractice(items: mistakeItems, title: "错题复习")
+                    onStartPractice()
+                } label: {
+                    Label("练错题", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                }
+                .disabled(mistakeItems.isEmpty)
             }
 
             VStack(spacing: 34) {
+                WeeklySection(summaries: studyStore.weeklySummaries, dailyGoal: studyStore.data.dailyGoal)
                 HistorySection(entries: studyStore.recentHistory)
                 MistakeSection(records: studyStore.frequentMistakes)
             }
@@ -45,6 +105,50 @@ struct StudyDashboardView: View {
         .padding(56)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+    }
+
+    private var dailyGoalBinding: Binding<Int> {
+        Binding(
+            get: { studyStore.data.dailyGoal },
+            set: { studyStore.updateDailyGoal($0) }
+        )
+    }
+
+    private var reminderEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { studyStore.data.reminderEnabled },
+            set: { studyStore.updateDailyReminder(enabled: $0) }
+        )
+    }
+
+    private var reminderTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+                components.hour = studyStore.data.reminderHour
+                components.minute = studyStore.data.reminderMinute
+                return Calendar.current.date(from: components) ?? Date()
+            },
+            set: { studyStore.updateReminderTime($0) }
+        )
+    }
+}
+
+private struct MetricBlock: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 30, weight: .semibold))
+                .monospacedDigit()
+
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 110)
     }
 }
 
@@ -92,6 +196,45 @@ private struct MistakeSection: View {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct WeeklySection: View {
+    let summaries: [WeeklyStudySummary]
+    let dailyGoal: Int
+
+    private var maxCompletedCount: Int {
+        max(dailyGoal, summaries.map(\.completedCount).max() ?? 1, 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title: "本周", value: "\(summaries.reduce(0) { $0 + $1.completedCount })")
+
+            HStack(alignment: .bottom, spacing: 24) {
+                ForEach(summaries) { summary in
+                    VStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(summary.isToday ? Color.accentColor : Color.secondary.opacity(0.26))
+                            .frame(
+                                width: 28,
+                                height: max(8, 92 * Double(summary.completedCount) / Double(maxCompletedCount))
+                            )
+
+                        Text(summary.label)
+                            .font(.caption)
+                            .foregroundStyle(summary.isToday ? .primary : .secondary)
+
+                        Text("\(summary.completedCount)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: 44)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 136)
         }
     }
 }

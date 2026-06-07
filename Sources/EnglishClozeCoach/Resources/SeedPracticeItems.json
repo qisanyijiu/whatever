@@ -5,9 +5,9 @@
     "targetEnglish": "I am going to meet my friend this afternoon.",
     "segments": [
       { "type": "text", "text": "I am going to " },
-      { "type": "blank", "blank": { "id": "seed-daily-meet-blank-0", "answer": "meet" } },
+      { "type": "blank", "blank": { "id": "seed-daily-meet-blank-1", "answer": "meet" } },
       { "type": "text", "text": " my friend this " },
-      { "type": "blank", "blank": { "id": "seed-daily-meet-blank-1", "answer": "afternoon" } },
+      { "type": "blank", "blank": { "id": "seed-daily-meet-blank-2", "answer": "afternoon" } },
       { "type": "text", "text": "." }
     ]
   },
@@ -17,9 +17,9 @@
     "targetEnglish": "Could you send me the document after the meeting?",
     "segments": [
       { "type": "text", "text": "Could you " },
-      { "type": "blank", "blank": { "id": "seed-work-document-blank-0", "answer": "send" } },
+      { "type": "blank", "blank": { "id": "seed-work-document-blank-1", "answer": "send" } },
       { "type": "text", "text": " me the " },
-      { "type": "blank", "blank": { "id": "seed-work-document-blank-1", "answer": "document" } },
+      { "type": "blank", "blank": { "id": "seed-work-document-blank-2", "answer": "document" } },
       { "type": "text", "text": " after the meeting?" }
     ]
   },
@@ -29,9 +29,9 @@
     "targetEnglish": "I am a little nervous, but I am ready.",
     "segments": [
       { "type": "text", "text": "I am a little " },
-      { "type": "blank", "blank": { "id": "seed-feeling-ready-blank-0", "answer": "nervous" } },
+      { "type": "blank", "blank": { "id": "seed-feeling-ready-blank-1", "answer": "nervous" } },
       { "type": "text", "text": ", but I am " },
-      { "type": "blank", "blank": { "id": "seed-feeling-ready-blank-1", "answer": "ready" } },
+      { "type": "blank", "blank": { "id": "seed-feeling-ready-blank-2", "answer": "ready" } },
       { "type": "text", "text": "." }
     ]
   },
@@ -41,9 +41,9 @@
     "targetEnglish": "If I practice every day, I will speak more fluently.",
     "segments": [
       { "type": "text", "text": "If I " },
-      { "type": "blank", "blank": { "id": "seed-study-fluently-blank-0", "answer": "practice" } },
+      { "type": "blank", "blank": { "id": "seed-study-fluently-blank-1", "answer": "practice" } },
       { "type": "text", "text": " every day, I will speak more " },
-      { "type": "blank", "blank": { "id": "seed-study-fluently-blank-1", "answer": "fluently" } },
+      { "type": "blank", "blank": { "id": "seed-study-fluently-blank-2", "answer": "fluently" } },
       { "type": "text", "text": "." }
     ]
   },
@@ -53,9 +53,9 @@
     "targetEnglish": "I would like a cup of hot coffee with no sugar.",
     "segments": [
       { "type": "text", "text": "I would like a cup of hot " },
-      { "type": "blank", "blank": { "id": "seed-coffee-blank-0", "answer": "coffee" } },
+      { "type": "blank", "blank": { "id": "seed-coffee-blank-1", "answer": "coffee" } },
       { "type": "text", "text": " with no " },
-      { "type": "blank", "blank": { "id": "seed-coffee-blank-1", "answer": "sugar" } },
+      { "type": "blank", "blank": { "id": "seed-coffee-blank-2", "answer": "sugar" } },
       { "type": "text", "text": "." }
     ]
   }
