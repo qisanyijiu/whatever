@@ -1,9 +1,9 @@
 import Foundation
 
-struct AITextService {
-    private let client: OpenAICompatibleAIClient
+struct AITextService: Sendable {
+    private let client: any AICompletionClient
 
-    init(client: OpenAICompatibleAIClient = OpenAICompatibleAIClient()) {
+    init(client: AICompletionClient = OpenAICompatibleAIClient()) {
         self.client = client
     }
 
@@ -108,7 +108,11 @@ struct AITextService {
     }
 }
 
-struct OpenAICompatibleAIClient {
+protocol AICompletionClient: Sendable {
+    func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String
+}
+
+struct OpenAICompatibleAIClient: AICompletionClient, Sendable {
     func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String {
         guard provider.isReady else {
             throw AITextServiceError.providerNotReady

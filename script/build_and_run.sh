@@ -54,6 +54,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>whatever uses the microphone for local shadowing recordings and playback.</string>
 </dict>
 </plist>
 PLIST

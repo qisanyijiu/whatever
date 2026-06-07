@@ -19,7 +19,7 @@ with cloze exercises.
 - Deck-based libraries with search, rename, delete, item editing, and deck-level progress.
 - Import preview editor for reviewing Chinese prompts, English sentences, and blanks before saving.
 - Mistake review and daily review queues.
-- System speech playback plus a dictation/shadowing practice page.
+- System speech playback plus a dictation/shadowing page with local recording and playback.
 - Local answer tolerance for casing, punctuation, contractions, light stemming, and small typos.
 - Multiple local OpenAI-compatible AI profiles with manual active-provider selection.
 - Use the selected AI profile to translate imported English into Chinese prompts.
@@ -39,6 +39,23 @@ Build only:
 ```bash
 swift build
 ```
+
+Run unit tests:
+
+```bash
+./script/run_unit_tests.sh
+```
+
+Check unit-test coverage:
+
+```bash
+./script/check_coverage.sh
+```
+
+The coverage gate requires at least 80% line coverage for the core unit-tested
+business logic: models, stores, and offline service code. SwiftUI views and
+platform-only services such as microphone recording, speech playback, and
+network transcript downloaders are excluded from this unit-test coverage gate.
 
 The launch script creates:
 
@@ -83,6 +100,12 @@ Local users and study records are saved under:
 
 Study records include the daily goal and reminder preferences. The reminder
 itself is scheduled through macOS local notifications.
+
+Shadowing recordings are saved locally under:
+
+```text
+~/Library/Application Support/whatever/Recordings
+```
 
 AI interface profile metadata is saved locally as:
 

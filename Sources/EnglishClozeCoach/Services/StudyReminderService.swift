@@ -3,8 +3,17 @@ import Foundation
 
 struct StudyReminderService {
     private let reminderIdentifier = "whatever.daily-study-reminder"
+    private let schedulesNotifications: Bool
+
+    init(schedulesNotifications: Bool = true) {
+        self.schedulesNotifications = schedulesNotifications
+    }
 
     func syncDailyReminder(enabled: Bool, hour: Int, minute: Int) {
+        guard schedulesNotifications else {
+            return
+        }
+
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [reminderIdentifier])
 

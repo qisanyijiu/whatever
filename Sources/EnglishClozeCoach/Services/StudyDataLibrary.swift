@@ -2,11 +2,13 @@ import Foundation
 
 struct StudyDataLibrary {
     private let fileManager: FileManager
+    private let applicationSupportOverride: URL?
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, applicationSupportDirectory: URL? = nil) {
         self.fileManager = fileManager
+        self.applicationSupportOverride = applicationSupportDirectory
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -39,6 +41,10 @@ struct StudyDataLibrary {
     }
 
     private func applicationSupportDirectory() -> URL {
+        if let applicationSupportOverride {
+            return applicationSupportOverride
+        }
+
         let baseURL = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

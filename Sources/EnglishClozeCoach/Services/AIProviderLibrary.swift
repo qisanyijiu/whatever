@@ -2,16 +2,19 @@ import Foundation
 
 struct AIProviderLibrary {
     private let fileManager: FileManager
-    private let keychain: KeychainService
+    private let secretStore: SecretStore
+    private let applicationSupportOverride: URL?
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
 
     init(
         fileManager: FileManager = .default,
-        keychain: KeychainService = KeychainService(service: "whatever.ai-providers")
+        secretStore: SecretStore = KeychainService(service: "whatever.ai-providers"),
+        applicationSupportDirectory: URL? = nil
     ) {
         self.fileManager = fileManager
-        self.keychain = keychain
+        self.secretStore = secretStore
+        self.applicationSupportOverride = applicationSupportDirectory
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -28,10 +31,10 @@ struct AIProviderLibrary {
             if !provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 shouldSanitizeJSON = true
             }
-            if let savedAPIKey = keychain.read(account: provider.id), !savedAPIKey.isEmpty {
+            if let savedAPIKey = secretStore.read(account: provider.id), !savedAPIKey.isEmpty {
                 hydratedProvider.apiKey = savedAPIKey
             } else if !provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try? keychain.save(provider.apiKey, account: provider.id)
+                try? secretStore.save(provider.apiKey, account: provider.id)
             }
             return hydratedProvider
         }
@@ -51,9 +54,9 @@ struct AIProviderLibrary {
         for index in sanitizedSettings.providers.indices {
             let provider = sanitizedSettings.providers[index]
             if provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try keychain.delete(account: provider.id)
+                try secretStore.delete(account: provider.id)
             } else {
-                try keychain.save(provider.apiKey, account: provider.id)
+                try secretStore.save(provider.apiKey, account: provider.id)
             }
             sanitizedSettings.providers[index].apiKey = ""
         }
@@ -64,7 +67,7 @@ struct AIProviderLibrary {
     }
 
     func deleteSecret(for providerID: AIProviderConfig.ID) throws {
-        try keychain.delete(account: providerID)
+        try secretStore.delete(account: providerID)
     }
 
     private func settingsURL() -> URL {
@@ -72,6 +75,10 @@ struct AIProviderLibrary {
     }
 
     private func applicationSupportDirectory() -> URL {
+        if let applicationSupportOverride {
+            return applicationSupportOverride
+        }
+
         let baseURL = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

@@ -9,14 +9,37 @@ let package = Package(
     products: [
         .executable(
             name: "whatever",
-            targets: ["EnglishClozeCoach"]
+            targets: ["whatever"]
         )
     ],
     targets: [
-        .executableTarget(
+        .target(
             name: "EnglishClozeCoach",
+            path: "Sources/EnglishClozeCoach",
+            exclude: [
+                "App"
+            ],
             resources: [
                 .process("Resources")
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-enable-testing"])
+            ]
+        ),
+        .executableTarget(
+            name: "whatever",
+            dependencies: ["EnglishClozeCoach"],
+            path: "Sources/EnglishClozeCoach/App",
+            swiftSettings: [
+                .unsafeFlags(["-enable-testing"])
+            ]
+        ),
+        .executableTarget(
+            name: "EnglishClozeCoachUnitTests",
+            dependencies: ["EnglishClozeCoach"],
+            path: "Tests/EnglishClozeCoachUnitTests",
+            swiftSettings: [
+                .unsafeFlags(["-enable-testing"])
             ]
         )
     ]

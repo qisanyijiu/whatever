@@ -2,12 +2,20 @@ import Foundation
 
 struct UserAccountLibrary {
     private let fileManager: FileManager
+    private let userDefaults: UserDefaults
+    private let applicationSupportOverride: URL?
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
     private let activeUserIDKey = "whatever.activeUserID"
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        userDefaults: UserDefaults = .standard,
+        applicationSupportDirectory: URL? = nil
+    ) {
         self.fileManager = fileManager
+        self.userDefaults = userDefaults
+        self.applicationSupportOverride = applicationSupportDirectory
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -27,14 +35,14 @@ struct UserAccountLibrary {
     }
 
     func activeUserID() -> String? {
-        UserDefaults.standard.string(forKey: activeUserIDKey)
+        userDefaults.string(forKey: activeUserIDKey)
     }
 
     func setActiveUserID(_ id: String?) {
         if let id {
-            UserDefaults.standard.set(id, forKey: activeUserIDKey)
+            userDefaults.set(id, forKey: activeUserIDKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: activeUserIDKey)
+            userDefaults.removeObject(forKey: activeUserIDKey)
         }
     }
 
@@ -43,6 +51,10 @@ struct UserAccountLibrary {
     }
 
     private func applicationSupportDirectory() -> URL {
+        if let applicationSupportOverride {
+            return applicationSupportOverride
+        }
+
         let baseURL = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

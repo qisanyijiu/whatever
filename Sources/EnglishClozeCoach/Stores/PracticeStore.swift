@@ -117,7 +117,9 @@ final class PracticeStore: ObservableObject {
 
         let deck = PracticeDeck(
             id: "deck-\(UUID().uuidString)",
-            name: draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "导入题库" : draft.name,
+            name: draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "导入题库"
+                : draft.name.trimmingCharacters(in: .whitespacesAndNewlines),
             source: draft.source,
             createdAt: Date(),
             updatedAt: Date(),

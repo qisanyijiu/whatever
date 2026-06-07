@@ -2,11 +2,19 @@ import Foundation
 
 struct PracticeLibrary {
     private let fileManager: FileManager
+    private let applicationSupportOverride: URL?
+    private let legacyApplicationSupportOverride: URL?
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        applicationSupportDirectory: URL? = nil,
+        legacyApplicationSupportDirectory: URL? = nil
+    ) {
         self.fileManager = fileManager
+        self.applicationSupportOverride = applicationSupportDirectory
+        self.legacyApplicationSupportOverride = legacyApplicationSupportDirectory
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -89,6 +97,10 @@ struct PracticeLibrary {
     }
 
     private func applicationSupportDirectory() throws -> URL {
+        if let applicationSupportOverride {
+            return applicationSupportOverride
+        }
+
         let baseURL = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -99,6 +111,10 @@ struct PracticeLibrary {
     }
 
     private func legacyApplicationSupportDirectory() throws -> URL {
+        if let legacyApplicationSupportOverride {
+            return legacyApplicationSupportOverride
+        }
+
         let baseURL = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

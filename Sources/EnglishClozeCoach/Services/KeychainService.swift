@@ -1,7 +1,13 @@
 import Foundation
 import Security
 
-struct KeychainService {
+protocol SecretStore {
+    func read(account: String) -> String?
+    func save(_ value: String, account: String) throws
+    func delete(account: String) throws
+}
+
+struct KeychainService: SecretStore {
     enum KeychainError: LocalizedError {
         case unexpectedStatus(OSStatus)
 
