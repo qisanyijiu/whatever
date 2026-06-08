@@ -14,16 +14,18 @@ struct ImportView: View {
     @State private var message: String?
     @State private var isDownloadingTED = false
     @State private var isDownloadingScript = false
+    @State private var isReadingFolder = false
     @State private var draftItems: [ImportDraftItem] = []
     @State private var isPreviewing = false
     @State private var isTranslating = false
 
     private let tedDownloader = TEDTranscriptDownloader()
     private let scriptDownloader = ScriptTextDownloader()
+    private let folderImporter = FolderTextImporter()
     private let aiTextService = AITextService()
 
     private var isDownloadingContent: Bool {
-        isDownloadingTED || isDownloadingScript
+        isDownloadingTED || isDownloadingScript || isReadingFolder
     }
 
     var body: some View {
@@ -99,6 +101,20 @@ struct ImportView: View {
                 } label: {
                     Label("选择 .txt/.srt/.vtt", systemImage: "doc")
                 }
+                .disabled(isDownloadingContent)
+
+                Button {
+                    chooseFolder()
+                } label: {
+                    if isReadingFolder {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("读取中")
+                    } else {
+                        Label("选择文件夹", systemImage: "folder")
+                    }
+                }
+                .disabled(isDownloadingContent)
 
                 Spacer()
 
@@ -222,6 +238,35 @@ struct ImportView: View {
             message = nil
         } catch {
             message = "无法读取文件：\(error.localizedDescription)"
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "选择文件夹"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        isReadingFolder = true
+        message = "正在读取文件夹..."
+
+        do {
+            let result = try folderImporter.importText(from: url)
+            text = result.text
+            sourceLabel = result.sourceLabel
+            if deckName == "导入题库" || deckName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                deckName = result.folderName
+            }
+            isReadingFolder = false
+            generatePreview()
+        } catch {
+            isReadingFolder = false
+            message = "无法导入文件夹：\(error.localizedDescription)"
         }
     }
 

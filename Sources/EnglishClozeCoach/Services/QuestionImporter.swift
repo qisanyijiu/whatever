@@ -15,10 +15,6 @@ struct QuestionImporter {
                 return nil
             }
 
-            guard !blanks.isEmpty else {
-                return nil
-            }
-
             return ImportDraftItem(
                 id: id,
                 sourceChinese: translationService.translate(english: sentence),
@@ -37,14 +33,6 @@ struct QuestionImporter {
         splitSentences(text).compactMap { sentence in
             let id = "imported-\(UUID().uuidString)"
             let segments = clozeGenerator.segments(from: sentence, itemID: id)
-            guard segments.contains(where: { segment in
-                if case .blank = segment {
-                    return true
-                }
-                return false
-            }) else {
-                return nil
-            }
 
             return PracticeItem(
                 id: id,
@@ -89,11 +77,11 @@ struct QuestionImporter {
 
     private func splitSentences(_ text: String) -> [String] {
         let nsText = text as NSString
-        let regex = try? NSRegularExpression(pattern: #"[^.!?\n]+[.!?]?"#)
-        let matches = regex?.matches(
+        let regex = try! NSRegularExpression(pattern: #"[^.!?\n]+[.!?]?"#)
+        let matches = regex.matches(
             in: text,
             range: NSRange(location: 0, length: nsText.length)
-        ) ?? []
+        )
 
         return matches
             .map { match in

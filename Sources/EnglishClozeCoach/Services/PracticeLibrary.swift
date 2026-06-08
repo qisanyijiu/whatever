@@ -4,17 +4,22 @@ struct PracticeLibrary {
     private let fileManager: FileManager
     private let applicationSupportOverride: URL?
     private let legacyApplicationSupportOverride: URL?
+    private let seedItemsProvider: () -> [PracticeItem]
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
 
     init(
         fileManager: FileManager = .default,
         applicationSupportDirectory: URL? = nil,
-        legacyApplicationSupportDirectory: URL? = nil
+        legacyApplicationSupportDirectory: URL? = nil,
+        seedItemsProvider: (() -> [PracticeItem])? = nil
     ) {
         self.fileManager = fileManager
         self.applicationSupportOverride = applicationSupportDirectory
         self.legacyApplicationSupportOverride = legacyApplicationSupportDirectory
+        self.seedItemsProvider = seedItemsProvider ?? {
+            Self.bundledSeedItems(decoder: JSONDecoder())
+        }
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -58,7 +63,7 @@ struct PracticeLibrary {
     }
 
     private func seedDecks() -> [PracticeDeck] {
-        let items = loadSeedItems()
+        let items = seedItemsProvider()
         guard !items.isEmpty else {
             return []
         }
@@ -75,13 +80,17 @@ struct PracticeLibrary {
         ]
     }
 
-    private func loadSeedItems() -> [PracticeItem] {
-        guard let url = Bundle.module.url(forResource: "SeedPracticeItems", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let items = try? decoder.decode([PracticeItem].self, from: data) else {
+    static func bundledSeedItems(decoder: JSONDecoder = JSONDecoder()) -> [PracticeItem] {
+        let data = Bundle.module.url(forResource: "SeedPracticeItems", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+        return seedItems(from: data, decoder: decoder)
+    }
+
+    static func seedItems(from data: Data?, decoder: JSONDecoder = JSONDecoder()) -> [PracticeItem] {
+        guard let data else {
             return []
         }
-        return items
+        return (try? decoder.decode([PracticeItem].self, from: data)) ?? []
     }
 
     private func loadLegacySavedItems() throws -> [PracticeItem] {
@@ -97,29 +106,29 @@ struct PracticeLibrary {
     }
 
     private func applicationSupportDirectory() throws -> URL {
-        if let applicationSupportOverride {
-            return applicationSupportOverride
-        }
+        try applicationSupportOverride ?? Self.defaultApplicationSupportDirectory(fileManager: fileManager)
+    }
 
+    static func defaultApplicationSupportDirectory(fileManager: FileManager = .default) throws -> URL {
         let baseURL = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
-            create: true
+            create: false
         )
         return baseURL.appendingPathComponent("whatever", isDirectory: true)
     }
 
     private func legacyApplicationSupportDirectory() throws -> URL {
-        if let legacyApplicationSupportOverride {
-            return legacyApplicationSupportOverride
-        }
+        try legacyApplicationSupportOverride ?? Self.defaultLegacyApplicationSupportDirectory(fileManager: fileManager)
+    }
 
+    static func defaultLegacyApplicationSupportDirectory(fileManager: FileManager = .default) throws -> URL {
         let baseURL = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
-            create: true
+            create: false
         )
         return baseURL.appendingPathComponent("EnglishClozeCoach", isDirectory: true)
     }

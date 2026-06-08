@@ -27,9 +27,6 @@ struct ClozeGenerator {
         }
 
         let selectedWords = selectBlankWords(from: words)
-        guard !selectedWords.isEmpty else {
-            return [.text(sentence)]
-        }
 
         let nsSentence = sentence as NSString
         var cursor = 0

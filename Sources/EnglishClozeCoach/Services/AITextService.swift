@@ -81,9 +81,7 @@ struct AITextService: Sendable {
             jsonText = trimmedContent
         }
 
-        guard let data = jsonText.data(using: .utf8) else {
-            throw AITextServiceError.invalidResponse
-        }
+        let data = Data(jsonText.utf8)
 
         do {
             return try JSONDecoder().decode([String].self, from: data)
@@ -112,7 +110,19 @@ protocol AICompletionClient: Sendable {
     func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String
 }
 
+protocol HTTPDataSession: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+extension URLSession: HTTPDataSession {}
+
 struct OpenAICompatibleAIClient: AICompletionClient, Sendable {
+    private let session: any HTTPDataSession
+
+    init(session: any HTTPDataSession = URLSession.shared) {
+        self.session = session
+    }
+
     func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String {
         guard provider.isReady else {
             throw AITextServiceError.providerNotReady
@@ -137,7 +147,7 @@ struct OpenAICompatibleAIClient: AICompletionClient, Sendable {
             )
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AITextServiceError.invalidResponse
         }

@@ -1,10 +1,17 @@
 import Foundation
 
 struct ImportDraft: Identifiable, Hashable {
-    let id = UUID().uuidString
+    let id: String
     var name: String
     var source: String
     var items: [ImportDraftItem]
+
+    init(id: String = UUID().uuidString, name: String, source: String, items: [ImportDraftItem]) {
+        self.id = id
+        self.name = name
+        self.source = source
+        self.items = items
+    }
 }
 
 struct ImportDraftItem: Identifiable, Hashable {

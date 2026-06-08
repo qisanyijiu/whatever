@@ -9,7 +9,8 @@ with cloze exercises.
 - Inline English blanks with instant feedback.
 - Green underline means correct, red underline means incorrect, gray means empty.
 - Built-in seed exercises stored as JSON instead of hard-coded Swift data.
-- Paste English text or import a `.txt` file to generate new exercises.
+- Paste English text, import a single text file, or select a folder of English
+  files to generate new exercises.
 - Download a TED talk transcript from a TED URL and generate exercises.
 - Download a public subtitle/script URL (`.srt`, `.vtt`, `.txt`, or readable
   text page) and generate exercises.
@@ -52,7 +53,7 @@ Check unit-test coverage:
 ./script/check_coverage.sh
 ```
 
-The coverage gate requires at least 80% line coverage for the core unit-tested
+The coverage gate requires at least 95% line coverage for the core unit-tested
 business logic: models, stores, and offline service code. SwiftUI views and
 platform-only services such as microphone recording, speech playback, and
 network transcript downloaders are excluded from this unit-test coverage gate.
@@ -66,9 +67,15 @@ dist/whatever.app
 ## Importing Content
 
 Use the import button in the toolbar to paste English text, select a `.txt`
-file, select a subtitle file (`.srt` or `.vtt`), paste a TED talk URL, or paste
-a public subtitle/script URL. The app cleans transcript text, splits it into
-sentences, and chooses one to three content words per sentence as blanks.
+file, select a subtitle file (`.srt` or `.vtt`), select a folder, paste a TED
+talk URL, or paste a public subtitle/script URL. The app cleans transcript text,
+splits it into sentences, and chooses one to three content words per sentence
+as blanks.
+
+Folder import scans supported English text files recursively (`.txt`, `.text`,
+`.md`, `.markdown`, `.srt`, `.vtt`, `.html`, and `.htm`), then opens an
+editable preview. The deck name defaults to the folder name, can be changed
+before saving, and can be renamed later from the library page.
 
 For copyrighted shows such as *Yes, Prime Minister*, provide a legally
 accessible subtitle or script URL; the app does not bundle copyrighted scripts.

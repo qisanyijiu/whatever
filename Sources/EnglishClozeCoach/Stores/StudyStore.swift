@@ -49,10 +49,7 @@ final class StudyStore: ObservableObject {
         var streak = 0
         while completedDays.contains(day) {
             streak += 1
-            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else {
-                break
-            }
-            day = previousDay
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
         }
         return streak
     }
@@ -63,10 +60,12 @@ final class StudyStore: ObservableObject {
         }
         .mapValues(\.count)
 
-        return (0..<7).compactMap { offset in
-            guard let date = calendar.date(byAdding: .day, value: offset - 6, to: calendar.startOfDay(for: Date())) else {
-                return nil
-            }
+        return (0..<7).map { offset in
+            let date = calendar.date(
+                byAdding: .day,
+                value: offset - 6,
+                to: calendar.startOfDay(for: Date())
+            )!
 
             return WeeklyStudySummary(
                 id: ISO8601DateFormatter().string(from: date),
@@ -134,8 +133,8 @@ final class StudyStore: ObservableObject {
 
     func updateReminderTime(_ date: Date) {
         let components = calendar.dateComponents([.hour, .minute], from: date)
-        data.reminderHour = components.hour ?? 20
-        data.reminderMinute = components.minute ?? 0
+        data.reminderHour = components.hour!
+        data.reminderMinute = components.minute!
         save()
         reminderService.syncDailyReminder(
             enabled: data.reminderEnabled,
@@ -250,13 +249,13 @@ final class StudyStore: ObservableObject {
                 data.reviewStates[index].ease = min(3.0, data.reviewStates[index].ease + 0.12)
                 let nextInterval = max(1, Int(Double(max(1, data.reviewStates[index].intervalDays)) * data.reviewStates[index].ease))
                 data.reviewStates[index].intervalDays = nextInterval
-                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: nextInterval, to: now) ?? now
+                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: nextInterval, to: now)!
             } else {
                 data.reviewStates[index].lapseCount += 1
                 data.reviewStates[index].consecutiveCorrect = 0
                 data.reviewStates[index].ease = max(1.3, data.reviewStates[index].ease - 0.2)
                 data.reviewStates[index].intervalDays = 1
-                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: 1, to: now) ?? now
+                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: 1, to: now)!
             }
             data.reviewStates[index].lastReviewedAt = now
         } else {
@@ -267,7 +266,7 @@ final class StudyStore: ObservableObject {
                     itemID: itemID,
                     ease: wrongBlankCount == 0 ? 2.2 : 1.6,
                     intervalDays: firstInterval,
-                    dueAt: Calendar.current.date(byAdding: .day, value: firstInterval, to: now) ?? now,
+                    dueAt: Calendar.current.date(byAdding: .day, value: firstInterval, to: now)!,
                     lastReviewedAt: now,
                     consecutiveCorrect: wrongBlankCount == 0 ? 1 : 0,
                     lapseCount: wrongBlankCount == 0 ? 0 : 1

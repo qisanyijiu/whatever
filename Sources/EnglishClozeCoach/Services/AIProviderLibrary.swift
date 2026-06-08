@@ -75,15 +75,15 @@ struct AIProviderLibrary {
     }
 
     private func applicationSupportDirectory() -> URL {
-        if let applicationSupportOverride {
-            return applicationSupportOverride
-        }
+        applicationSupportOverride ?? Self.defaultApplicationSupportDirectory(fileManager: fileManager)
+    }
 
+    static func defaultApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
         let baseURL = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
-            create: true
+            create: false
         )) ?? fileManager.homeDirectoryForCurrentUser
 
         return baseURL.appendingPathComponent("whatever", isDirectory: true)
