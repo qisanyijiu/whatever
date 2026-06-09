@@ -326,6 +326,124 @@ let coreLearningTests: [UnitTest] = [
         try expect(!result.text.contains("00:00:01"))
         try expect(!result.text.contains("Ignored English content"))
     },
+    UnitTest(name: "FolderTextImporter imports selected local files in batch") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+
+        let firstFile = directory.appendingPathComponent("02 notes.txt")
+        let secondFile = directory.appendingPathComponent("01 captions.vtt")
+        let logFile = directory.appendingPathComponent("03 transcript.log")
+        let chineseFile = directory.appendingPathComponent("中文.md")
+        let unsupportedFile = directory.appendingPathComponent("skip.pdf")
+        let unknownFile = directory.appendingPathComponent("skip.unknownwhatever")
+
+        try """
+        Local file import lets learners bring their own English reading material.
+        The app should split each selected document into practice questions.
+        """.write(to: firstFile, atomically: true, encoding: .utf8)
+        try """
+        WEBVTT
+
+        00:00:01.000 --> 00:00:04.000
+        Speaker: Batch selection keeps imported lessons organized.
+        """.write(to: secondFile, atomically: true, encoding: .utf8)
+        try """
+        Log style transcripts can still contain useful English source material.
+        Selected local text files should not be rejected only because of extension.
+        """.write(to: logFile, atomically: true, encoding: .utf8)
+        try "只有中文内容。".write(to: chineseFile, atomically: true, encoding: .utf8)
+        try "Ignored English content.".write(to: unsupportedFile, atomically: true, encoding: .utf8)
+        try "Unknown extension English content should stay ignored.".write(
+            to: unknownFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try FolderTextImporter().importText(
+            fromFiles: [firstFile, secondFile, logFile, chineseFile, unsupportedFile, unknownFile]
+        )
+
+        try expectEqual(result.folderName, "本地文件题库")
+        try expectEqual(result.fileCount, 3)
+        try expectEqual(result.sourceLabel, "本地文件（3 个英文文件）")
+        try expect(result.text.contains("Batch selection keeps imported lessons organized"))
+        try expect(result.text.contains("Local file import lets learners bring their own English"))
+        try expect(result.text.contains("Log style transcripts can still contain useful English"))
+        try expect(!result.text.contains("WEBVTT"))
+        try expect(!result.text.contains("Ignored English content"))
+        try expect(!result.text.contains("Unknown extension English content"))
+        try expect(!result.text.contains("只有中文"))
+    },
+    UnitTest(name: "FolderTextImporter streams selected files in size limited batches") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+
+        let files = ["01.txt", "02.txt", "03.txt"].map { directory.appendingPathComponent($0) }
+        for (index, file) in files.enumerated() {
+            try """
+            Size limited import batch \(index + 1) keeps memory controlled while generating useful English questions.
+            Learners can select many transcript files without building one huge source string.
+            """.write(to: file, atomically: true, encoding: .utf8)
+        }
+
+        var batches: [FolderImportBatch] = []
+        let summary = try FolderTextImporter().importTextBatches(
+            fromFiles: files,
+            maximumBatchByteCount: 180
+        ) { batch in
+            batches.append(batch)
+        }
+
+        try expectEqual(summary.folderName, "本地文件题库")
+        try expectEqual(summary.fileCount, 3)
+        try expectEqual(summary.sourceLabel, "本地文件（3 个英文文件）")
+        try expect(batches.count > 1)
+        try expectEqual(batches.reduce(0) { $0 + $1.fileCount }, 3)
+        try expect(batches.allSatisfy { !$0.text.isEmpty && $0.byteCount == $0.text.utf8.count })
+    },
+    UnitTest(name: "FolderTextImporter streams folders in size limited batches") {
+        let directory = try temporaryDirectory().appendingPathComponent("Batch Folder", isDirectory: true)
+        defer { removeTemporaryDirectory(directory.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        for name in ["a.txt", "b.txt"] {
+            try """
+            Folder batch import processes transcript files incrementally instead of joining everything first.
+            This keeps the generated cloze preview responsive for larger local libraries.
+            """.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+
+        var batches: [FolderImportBatch] = []
+        let summary = try FolderTextImporter().importTextBatches(
+            from: directory,
+            maximumBatchByteCount: 180
+        ) { batch in
+            batches.append(batch)
+        }
+
+        try expectEqual(summary.folderName, "Batch Folder")
+        try expectEqual(summary.fileCount, 2)
+        try expectEqual(summary.sourceLabel, "Batch Folder 文件夹（2 个英文文件）")
+        try expect(batches.count > 1)
+        try expectEqual(batches.reduce(0) { $0 + $1.fileCount }, 2)
+    },
+    UnitTest(name: "FolderTextImporter suggests single selected file name") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("daily practice.md")
+
+        try """
+        A single selected file keeps its readable file name as the default deck name.
+        Longer English content should still generate enough source material for questions.
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try FolderTextImporter().importText(fromFiles: [file])
+
+        try expectEqual(result.folderName, "daily practice")
+        try expectEqual(result.fileCount, 1)
+        try expectEqual(result.sourceLabel, "daily practice.md")
+        try expect(result.text.contains("single selected file keeps its readable file name"))
+    },
     UnitTest(name: "FolderTextImporter reports empty or missing folders") {
         let directory = try temporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -344,6 +462,13 @@ let coreLearningTests: [UnitTest] = [
         } catch let error as FolderTextImporter.ImportError {
             try expectEqual(error, .folderNotFound)
             try expectEqual(error.localizedDescription, "没有找到可读取的文件夹。")
+        }
+
+        do {
+            _ = try FolderTextImporter().importText(fromFiles: [directory.appendingPathComponent("missing.pdf")])
+            try fail("Expected no supported selected files")
+        } catch let error as FolderTextImporter.ImportError {
+            try expectEqual(error, .noSupportedEnglishFiles)
         }
     },
     UnitTest(name: "FolderTextImporter reads alternate encodings and skips unreadable files") {
@@ -525,6 +650,32 @@ let practiceStoreTests: [UnitTest] = [
         try expectEqual(StudyDataLibrary.defaultApplicationSupportDirectory(fileManager: failingFileManager).lastPathComponent, "whatever")
         try expectEqual(UserAccountLibrary.defaultApplicationSupportDirectory(fileManager: failingFileManager).lastPathComponent, "whatever")
     },
+    UnitTest(name: "PracticeStore handles empty libraries") {
+        let directory = try temporaryDirectory()
+        let legacyDirectory = try temporaryDirectory()
+        defer {
+            removeTemporaryDirectory(directory)
+            removeTemporaryDirectory(legacyDirectory)
+        }
+
+        let store = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: directory,
+                legacyApplicationSupportDirectory: legacyDirectory,
+                seedItemsProvider: { [] }
+            )
+        )
+
+        try expect(store.decks.isEmpty)
+        try expect(store.items.isEmpty)
+        try expect(store.selectedDeckID == nil)
+        try expect(store.selectedItemID == nil)
+        try expect(store.selectedDeck == nil)
+        try expect(store.selectedItem == nil)
+        try expectEqual(store.selectedIndex, 0)
+        try expect(!store.canAdvance)
+        try expect(!store.canGoBack)
+    },
     UnitTest(name: "PracticeStore selects deck and tracks answers") {
         let directory = try temporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -556,6 +707,7 @@ let practiceStoreTests: [UnitTest] = [
 
         store.setAnswer("send", for: secondItem.blanks[0])
         store.setAnswer("wrong", for: secondItem.blanks[1])
+        try expectEqual(store.answerText(for: ClozeBlank(id: "missing-answer", answer: "missing")), "")
         try expect(store.answerState(for: secondItem.blanks[0]) == .correct)
         try expect(store.answerState(for: secondItem.blanks[1]) == .incorrect)
         try expect(!store.isCompleted(secondItem))

@@ -93,11 +93,11 @@ struct ClozeGenerator {
 
     private func wordMatches(in sentence: String) -> [WordMatch] {
         let nsSentence = sentence as NSString
-        let regex = try? NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
-        let matches = regex?.matches(
+        let regex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
+        let matches = regex.matches(
             in: sentence,
             range: NSRange(location: 0, length: nsSentence.length)
-        ) ?? []
+        )
 
         return matches.map { match in
             let word = nsSentence.substring(with: match.range)

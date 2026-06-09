@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-THRESHOLD="${1:-95}"
+THRESHOLD="${1:-100}"
 PROFILE_DIR="$ROOT_DIR/.build/coverage"
 PROFILE_DATA="$PROFILE_DIR/coverage.profdata"
 REPORT_FILE="$PROFILE_DIR/coverage-report.txt"
