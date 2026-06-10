@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 struct ImportView: View {
     @ObservedObject var store: PracticeStore
     @ObservedObject var aiStore: AIProviderStore
+    @ObservedObject var translationJobStore: TranslationJobStore
+    var onJobCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var deckName = "导入题库"
@@ -68,7 +70,7 @@ struct ImportView: View {
                             .controlSize(.small)
                         Text("下载中")
                     } else {
-                        Label("下载 TED 文稿并预览", systemImage: "captions.bubble")
+                        Label("下载 TED 文稿并创建任务", systemImage: "captions.bubble")
                     }
                 }
                 .disabled(isDownloadingContent || tedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -86,7 +88,7 @@ struct ImportView: View {
                             .controlSize(.small)
                         Text("下载中")
                     } else {
-                        Label("下载台词并预览", systemImage: "text.quote")
+                        Label("下载台词并创建任务", systemImage: "text.quote")
                     }
                 }
                 .disabled(isDownloadingContent || scriptURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -138,7 +140,7 @@ struct ImportView: View {
                 Button {
                     generatePreview()
                 } label: {
-                    Label("生成预览", systemImage: "wand.and.stars")
+                    Label("创建任务", systemImage: "tray.and.arrow.down")
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -311,19 +313,15 @@ struct ImportView: View {
         isReadingFiles = true
         message = "正在读取本地文件..."
 
-        let accessTokens = panel.urls.map { url in
-            (url: url, didStartAccessing: url.startAccessingSecurityScopedResource())
-        }
-        defer {
-            accessTokens
-                .filter(\.didStartAccessing)
-                .forEach { $0.url.stopAccessingSecurityScopedResource() }
-        }
-
-        importTextBatches(
-            source: .files(panel.urls),
-            loadingFailurePrefix: "无法导入本地文件"
+        let jobID = translationJobStore.importFiles(
+            panel.urls,
+            name: deckName,
+            provider: aiStore.activeProvider
         )
+        translationJobStore.selectedJobID = jobID
+        isReadingFiles = false
+        onJobCreated()
+        dismiss()
     }
 
     private func chooseFolder() {
@@ -340,115 +338,27 @@ struct ImportView: View {
         isReadingFolder = true
         message = "正在读取文件夹..."
 
-        let didStartAccessing = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccessing {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        importTextBatches(
-            source: .folder(url),
-            loadingFailurePrefix: "无法导入文件夹"
+        let jobID = translationJobStore.importFolder(
+            url,
+            name: deckName,
+            provider: aiStore.activeProvider
         )
-    }
-
-    private enum BatchImportSource {
-        case files([URL])
-        case folder(URL)
-    }
-
-    private func importTextBatches(source: BatchImportSource, loadingFailurePrefix: String) {
-        cancelTranslation()
-
-        do {
-            let result = try generateDraftItems(from: source)
-            guard !result.items.isEmpty else {
-                isReadingFiles = false
-                isReadingFolder = false
-                message = "没有生成题目。"
-                return
-            }
-
-            text = ""
-            sourceLabel = result.summary.sourceLabel
-            if deckName == "导入题库" || deckName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                deckName = result.summary.folderName
-            }
-            isReadingFiles = false
-            isReadingFolder = false
-            finishGeneratedPreview(
-                items: result.items,
-                messagePrefix: "已从 \(result.summary.fileCount) 个英文文件生成 \(result.items.count) 道题。"
-            )
-        } catch {
-            isReadingFiles = false
-            isReadingFolder = false
-            message = "\(loadingFailurePrefix)：\(error.localizedDescription)"
-        }
-    }
-
-    private func generateDraftItems(
-        from source: BatchImportSource
-    ) throws -> (summary: FolderImportSummary, items: [ImportDraftItem]) {
-        var items: [ImportDraftItem] = []
-        let handleBatch: (FolderImportBatch) throws -> Void = { batch in
-            if let draft = store.prepareImportDraft(
-                text: batch.text,
-                name: deckName,
-                source: sourceLabel
-            ) {
-                items.append(contentsOf: draft.items)
-            }
-        }
-
-        let summary: FolderImportSummary
-        switch source {
-        case let .files(urls):
-            summary = try folderImporter.importTextBatches(
-                fromFiles: urls,
-                maximumBatchByteCount: importBatchByteLimit,
-                handleBatch: handleBatch
-            )
-        case let .folder(url):
-            summary = try folderImporter.importTextBatches(
-                from: url,
-                maximumBatchByteCount: importBatchByteLimit,
-                handleBatch: handleBatch
-            )
-        }
-        return (summary, items)
+        translationJobStore.selectedJobID = jobID
+        isReadingFolder = false
+        onJobCreated()
+        dismiss()
     }
 
     private func generatePreview() {
-        cancelTranslation()
-
-        guard let draft = store.prepareImportDraft(
-            text: text,
+        let jobID = translationJobStore.importText(
+            text,
             name: deckName,
-            source: sourceLabel
-        ) else {
-            message = store.importError ?? "没有生成题目。"
-            return
-        }
-
-        deckName = draft.name
-        sourceLabel = draft.source
-        finishGeneratedPreview(
-            items: draft.items,
-            messagePrefix: "已生成 \(draft.items.count) 道题。"
+            source: sourceLabel,
+            provider: aiStore.activeProvider
         )
-    }
-
-    private func finishGeneratedPreview(items: [ImportDraftItem], messagePrefix: String) {
-        draftItems = items
-        isPreviewing = true
-        if aiStore.activeProvider?.isReady == true {
-            message = "\(messagePrefix)正在自动翻译中文提示。"
-            translateDraftItems(automatic: true)
-        } else {
-            message = "\(messagePrefix)中文提示可手动编辑，或先到 AI 页配置接口。"
-        }
+        translationJobStore.selectedJobID = jobID
+        onJobCreated()
+        dismiss()
     }
 
     private func saveDraft() {

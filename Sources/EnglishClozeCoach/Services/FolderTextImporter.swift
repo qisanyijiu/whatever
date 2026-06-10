@@ -182,10 +182,6 @@ struct FolderTextImporter {
         return ImportedFile(url: url, text: preparedText)
     }
 
-    private func importedText(from url: URL) -> String? {
-        importedFile(from: url)?.text
-    }
-
     private struct InternalImportBatch {
         var fileCount: Int
         var byteCount: Int

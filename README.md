@@ -10,7 +10,7 @@ with cloze exercises.
 - Green underline means correct, red underline means incorrect, gray means empty.
 - Built-in seed exercises stored as JSON instead of hard-coded Swift data.
 - Paste English text, select one or more local English files, or select a folder
-  of English files to generate new exercises.
+  of English files to create background import and translation jobs.
 - Download a TED talk transcript from a TED URL and generate exercises.
 - Download a public subtitle/script URL (`.srt`, `.vtt`, `.txt`, or readable
   text page) and generate exercises.
@@ -18,12 +18,14 @@ with cloze exercises.
 - Per-user completion progress, recent history, mistake tracking, and SRS review.
 - Daily goal tracking, current streak, weekly completion chart, and local macOS reminders.
 - Deck-based libraries with search, rename, delete, item editing, and deck-level progress.
-- Import preview editor for reviewing Chinese prompts, English sentences, and blanks before saving.
+- Dedicated task page for import and translation progress, with pause, start,
+  retry, delete, and save-as-deck actions.
 - Mistake review and daily review queues.
 - System speech playback plus a dictation/shadowing page with local recording and playback.
 - Local answer tolerance for casing, punctuation, contractions, light stemming, and small typos.
 - Multiple local OpenAI-compatible AI profiles with manual active-provider selection.
 - Use the selected AI profile to translate imported English into Chinese prompts.
+  Translation jobs and per-item results are saved locally until imported into a deck.
 - Use the selected AI profile to explain the current cloze answers, with local fallback.
 - Imported exercises are saved locally and restored on the next launch.
 
@@ -55,8 +57,9 @@ Check unit-test coverage:
 
 The coverage gate requires 100% line coverage for the core unit-tested
 business logic: models, stores, and offline service code. SwiftUI views and
-platform-only services such as microphone recording, speech playback, and
-network transcript downloaders are excluded from this unit-test coverage gate.
+platform-only services such as microphone recording, speech playback, network
+transcript downloaders, and SwiftUI-facing async job orchestration are excluded
+from this unit-test coverage gate.
 
 The launch script creates:
 
@@ -68,23 +71,27 @@ dist/whatever.app
 
 Use the import button in the toolbar to paste English text, select one or more
 local files, select a folder, paste a TED talk URL, or paste a public
-subtitle/script URL. The app cleans transcript text, splits it into sentences,
-and chooses one to three content words per sentence as blanks.
+subtitle/script URL. The app creates a background job, cleans transcript text,
+splits it into sentences, and chooses one to three content words per sentence
+as blanks without blocking the practice UI.
 
 Local file and folder import support English text files (`.txt`, `.text`,
 `.md`, `.markdown`, `.srt`, `.vtt`, `.html`, `.htm`, `.csv`, `.tsv`, `.json`,
 `.jsonl`, `.log`, `.sub`, `.sbv`, `.ass`, and `.ssa`). Folder import scans
-recursively; multi-file import reads the selected files together, then opens an
-editable preview. The deck name can be changed before saving and renamed later
-from the library page.
+recursively; multi-file and folder import process source text in size-limited
+batches instead of joining every file into one large string. The deck name can
+be changed before import and renamed later from the library page.
 
 For copyrighted shows such as *Yes, Prime Minister*, provide a legally
 accessible subtitle or script URL; the app does not bundle copyrighted scripts.
 
-Imported questions start with an editable `待翻译` Chinese prompt. If the
-currently selected AI profile is ready, the preview automatically translates
-Chinese prompts one by one, shows progress, and lets failed rows retry. You can
-still edit prompts before saving.
+Imported questions start with a `待翻译` Chinese prompt. If the currently
+selected AI profile is ready, the task starts translation only after all
+selected files have been imported and split into questions. It translates
+Chinese prompts one by one, saves each result locally, shows progress on the
+task page, and lets failed rows retry. Tasks can also be paused and started
+manually. Saving a finished or partially finished task into a deck removes the
+intermediate task data.
 
 ## Data
 
@@ -120,6 +127,12 @@ AI interface profile metadata is saved locally as:
 
 ```text
 ~/Library/Application Support/whatever/AIProviders.json
+```
+
+Import and translation task metadata is saved locally as:
+
+```text
+~/Library/Application Support/whatever/TranslationJobs.json
 ```
 
 API keys are stored in macOS Keychain under the app service name

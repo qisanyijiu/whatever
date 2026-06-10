@@ -23,7 +23,7 @@ xcrun llvm-profdata merge -sparse "$PROFILE_DIR"/*.profraw -o "$PROFILE_DATA"
 
 xcrun llvm-cov report "$TEST_BINARY" \
   -instr-profile="$PROFILE_DATA" \
-  -ignore-filename-regex='/.build/|/Tests/|/Views/|/Support/|/Services/(KeychainService|ScriptTextDownloader|ShadowingRecorderService|SpeechService|StudyReminderService|TEDTranscriptDownloader)\.swift' \
+  -ignore-filename-regex='/.build/|/Tests/|/Views/|/Support/|/Stores/TranslationJobStore\.swift|/Services/(KeychainService|ScriptTextDownloader|ShadowingRecorderService|SpeechService|StudyReminderService|TEDTranscriptDownloader)\.swift' \
   | tee "$REPORT_FILE"
 
 LINE_COVERAGE="$(

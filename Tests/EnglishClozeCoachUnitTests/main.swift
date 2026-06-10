@@ -75,8 +75,26 @@ func runAsync(_ operation: @escaping @Sendable () async throws -> Void) throws {
         semaphore.signal()
     }
 
-    semaphore.wait()
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
     try box.result?.get()
+}
+
+func waitForMainActor(
+    timeout: TimeInterval = 4,
+    file: StaticString = #fileID,
+    line: UInt = #line,
+    condition: @escaping @MainActor () throws -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if try await MainActor.run(body: condition) {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    throw TestFailure(message: "Timed out waiting for condition", file: file, line: line)
 }
 
 final class AsyncResultBox: @unchecked Sendable {
@@ -1436,6 +1454,188 @@ let userStudyAndAITests: [UnitTest] = [
 ]
 
 let aiTextServiceTests: [UnitTest] = [
+    UnitTest(name: "TranslationJobLibrary saves loads and store imports translated text") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let library = TranslationJobLibrary(applicationSupportDirectory: directory)
+        let savedJob = TranslationJob(
+            id: "saved-job",
+            name: "Saved",
+            source: "unit",
+            providerID: "provider",
+            status: .completed,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            importedFileCount: 1,
+            items: [
+                TranslationJobItem(
+                    id: "saved-item",
+                    sourceChinese: "待翻译",
+                    targetEnglish: "Practice builds confidence.",
+                    blankText: "Practice",
+                    translatedChinese: "练习会建立信心。",
+                    status: .translated,
+                    errorMessage: nil
+                )
+            ],
+            errorMessage: nil
+        )
+        try library.save([savedJob])
+        try expectEqual(library.loadJobs(), [savedJob])
+        var readyJob = savedJob
+        readyJob.status = .ready
+        readyJob.items[0].status = .pending
+        readyJob.items[0].translatedChinese = nil
+        try expect(readyJob.canStart)
+        try expect(!readyJob.canPause)
+
+        var translatingJob = readyJob
+        translatingJob.status = .translating
+        translatingJob.items[0].status = .translating
+        try expect(!translatingJob.canStart)
+        try expect(translatingJob.canPause)
+
+        try expectEqual(savedJob.items[0].effectiveChinese, "练习会建立信心。")
+        try expectEqual(
+            TranslationJobItem(
+                id: "fallback",
+                sourceChinese: "待翻译",
+                targetEnglish: "Practice.",
+                blankText: "Practice",
+                translatedChinese: nil,
+                status: .pending,
+                errorMessage: nil
+            ).effectiveChinese,
+            "待翻译"
+        )
+        try expect(
+            TranslationJobLibrary(
+                applicationSupportDirectory: directory.appendingPathComponent("empty-jobs")
+            ).loadJobs().isEmpty
+        )
+        let redirectedLibrary = TranslationJobLibrary(
+            fileManager: StubApplicationSupportFileManager(
+                applicationSupportDirectory: directory.appendingPathComponent("redirected")
+            )
+        )
+        try redirectedLibrary.save([])
+        try expect(redirectedLibrary.loadJobs().isEmpty)
+        try expectEqual(TranslationJobLibrary.defaultApplicationSupportDirectory().lastPathComponent, "whatever")
+        let failingFileManager = StubApplicationSupportFileManager(
+            applicationSupportDirectory: directory,
+            throwsForApplicationSupport: true
+        )
+        try expectEqual(
+            TranslationJobLibrary.defaultApplicationSupportDirectory(fileManager: failingFileManager).lastPathComponent,
+            "whatever"
+        )
+
+        try runAsync {
+            let client = SequencedAICompletionClient(results: [.success(#"["专注练习会建立信心。"]"#)])
+            let store = await MainActor.run {
+                TranslationJobStore(
+                    library: library,
+                    aiTextService: AITextService(client: client),
+                    importBatchByteLimit: 120
+                )
+            }
+            let jobID = await MainActor.run {
+                store.importText(
+                    "Focused practice builds confidence.",
+                    name: "新任务",
+                    source: "粘贴文本",
+                    provider: readyProvider()
+                )
+            }
+
+            try await waitForMainActor {
+                store.jobs.first { $0.id == jobID }?.status == .completed
+            }
+
+            let draft = try await MainActor.run {
+                try require(store.importDraft(for: jobID))
+            }
+            try expectEqual(draft.name, "新任务")
+            try expectEqual(draft.items.first?.sourceChinese, "专注练习会建立信心。")
+            try expectEqual(draft.items.first?.targetEnglish, "Focused practice builds confidence.")
+
+            await MainActor.run {
+                store.deleteJob(jobID)
+            }
+            try expect(!library.loadJobs().contains { $0.id == jobID })
+        }
+    },
+    UnitTest(name: "TranslationJobStore imports files folders pauses and retries failed translations") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+
+        let file = directory.appendingPathComponent("lesson.txt")
+        try "Patient listening improves pronunciation.".write(to: file, atomically: true, encoding: .utf8)
+        let folder = directory.appendingPathComponent("Folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "Daily repetition builds fluent recall.".write(
+            to: folder.appendingPathComponent("talk.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try runAsync {
+            let client = SequencedAICompletionClient(results: [
+                .failure(TestError(message: "temporary failure")),
+                .success(#"["耐心倾听会改善发音。"]"#),
+                .success(#"["每日重复会建立流利回忆。"]"#)
+            ])
+            let store = await MainActor.run {
+                TranslationJobStore(
+                    library: TranslationJobLibrary(applicationSupportDirectory: directory.appendingPathComponent("jobs")),
+                    aiTextService: AITextService(client: client),
+                    importBatchByteLimit: 80
+                )
+            }
+
+            let fileJobID = await MainActor.run {
+                store.importFiles([file], name: "文件任务", provider: readyProvider())
+            }
+            try await waitForMainActor {
+                store.jobs.first { $0.id == fileJobID }?.status == .failed
+            }
+            try await MainActor.run {
+                let job = try require(store.jobs.first { $0.id == fileJobID })
+                try expectEqual(job.failedCount, 1)
+                try expectEqual(job.pendingCount, 0)
+                try expect(!job.canStart)
+                try expect(!job.canPause)
+                store.pause(jobID: fileJobID)
+                try expectEqual(store.jobs.first { $0.id == fileJobID }?.status, .failed)
+                store.retryFailed(jobID: fileJobID, provider: readyProvider())
+            }
+            try await waitForMainActor {
+                store.jobs.first { $0.id == fileJobID }?.status == .completed
+            }
+
+            let folderJobID = await MainActor.run {
+                store.importFolder(folder, name: "文件夹任务", provider: readyProvider())
+            }
+            try await waitForMainActor {
+                store.jobs.first { $0.id == folderJobID }?.status == .completed
+            }
+            try await MainActor.run {
+                let folderJob = try require(store.jobs.first { $0.id == folderJobID })
+                try expectEqual(folderJob.importedFileCount, 1)
+                try expectEqual(folderJob.translatedCount, 1)
+                try expectEqual(folderJob.progressText, "1/1")
+                try expectEqual(folderJob.failedCount, 0)
+                try expectEqual(folderJob.pendingCount, 0)
+                try expect(!folderJob.canStart)
+                try expect(!folderJob.canPause)
+
+                store.startTranslation(jobID: folderJobID, provider: nil)
+                try expectEqual(store.jobs.first { $0.id == folderJobID }?.status, .completed)
+                store.deleteJob(folderJobID)
+                try expect(store.importDraft(for: folderJobID) == nil)
+            }
+        }
+    },
     UnitTest(name: "AITextService translates JSON response in order") {
         let client = FakeAICompletionClient(response: #"prefix ["你好。","再见。"] suffix"#)
         let service = AITextService(client: client)
@@ -1699,6 +1899,30 @@ private final class FakeAICompletionClient: AICompletionClient, @unchecked Senda
         lastSystemPrompt = systemPrompt
         lastUserPrompt = userPrompt
         return response
+    }
+}
+
+private final class SequencedAICompletionClient: AICompletionClient, @unchecked Sendable {
+    private let queue: ResultQueue
+
+    init(results: [Result<String, Error>]) {
+        self.queue = ResultQueue(results: results)
+    }
+
+    func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String {
+        try await queue.next().get()
+    }
+}
+
+private actor ResultQueue {
+    private var results: [Result<String, Error>]
+
+    init(results: [Result<String, Error>]) {
+        self.results = results
+    }
+
+    func next() -> Result<String, Error> {
+        results.isEmpty ? .success(#"["翻译"]"#) : results.removeFirst()
     }
 }
 

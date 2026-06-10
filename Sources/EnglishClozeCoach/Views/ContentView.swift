@@ -6,6 +6,7 @@ struct ContentView: View {
         case libraries
         case records
         case ai
+        case jobs
         case dictation
     }
 
@@ -13,6 +14,7 @@ struct ContentView: View {
     @ObservedObject var sessionStore: UserSessionStore
     @ObservedObject var studyStore: StudyStore
     @ObservedObject var aiStore: AIProviderStore
+    @ObservedObject var translationJobStore: TranslationJobStore
     @State private var isImporting = false
     @State private var page: Page = .practice
     @State private var celebrationItemID: PracticeItem.ID?
@@ -43,6 +45,15 @@ struct ContentView: View {
                     .transition(.opacity)
             } else if page == .ai {
                 AISettingsView(aiStore: aiStore)
+                    .transition(.opacity)
+            } else if page == .jobs {
+                TranslationJobsView(
+                    jobStore: translationJobStore,
+                    practiceStore: store,
+                    aiStore: aiStore
+                ) {
+                    page = .practice
+                }
                     .transition(.opacity)
             } else if page == .dictation, let item = store.selectedItem {
                 DictationPracticeView(item: item, speechService: speechService)
@@ -95,6 +106,7 @@ struct ContentView: View {
                     Text("题库").tag(Page.libraries)
                     Text("记录").tag(Page.records)
                     Text("AI").tag(Page.ai)
+                    Text("任务").tag(Page.jobs)
                 }
                 .pickerStyle(.segmented)
                 .disabled(isCelebrating)
@@ -183,7 +195,13 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $isImporting) {
-            ImportView(store: store, aiStore: aiStore)
+            ImportView(
+                store: store,
+                aiStore: aiStore,
+                translationJobStore: translationJobStore
+            ) {
+                page = .jobs
+            }
         }
     }
 
