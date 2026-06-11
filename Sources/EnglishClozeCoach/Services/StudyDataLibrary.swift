@@ -1,6 +1,6 @@
 import Foundation
 
-struct StudyDataLibrary {
+struct StudyDataLibrary: @unchecked Sendable {
     private let fileManager: FileManager
     private let applicationSupportOverride: URL?
     private let decoder = JSONDecoder()

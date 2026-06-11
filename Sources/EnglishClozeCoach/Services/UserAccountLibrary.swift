@@ -1,6 +1,6 @@
 import Foundation
 
-struct UserAccountLibrary {
+struct UserAccountLibrary: @unchecked Sendable {
     private let fileManager: FileManager
     private let userDefaults: UserDefaults
     private let applicationSupportOverride: URL?

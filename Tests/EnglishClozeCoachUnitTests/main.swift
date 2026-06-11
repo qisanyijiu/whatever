@@ -592,6 +592,23 @@ let practiceStoreTests: [UnitTest] = [
 
         try expectEqual(loadedDecks.map(\.id), ["saved"])
         try expectEqual(loadedDecks[0].items[0].targetEnglish, sampleItem().targetEnglish)
+        try expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(PracticeLibrary.sqliteFileName).path
+        ))
+    },
+    UnitTest(name: "PracticeLibrary migrates legacy JSON decks into SQLite") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let jsonData = try JSONEncoder().encode([sampleDeck(id: "json-deck")])
+        try jsonData.write(to: directory.appendingPathComponent("Decks.json"))
+
+        let library = PracticeLibrary(applicationSupportDirectory: directory)
+        let loadedDecks = library.loadDecks()
+
+        try expectEqual(loadedDecks.map(\.id), ["json-deck"])
+        try expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(PracticeLibrary.sqliteFileName).path
+        ))
     },
     UnitTest(name: "PracticeLibrary migrates legacy flat saved items") {
         let directory = try temporaryDirectory()
@@ -787,6 +804,79 @@ let practiceStoreTests: [UnitTest] = [
         try expectEqual(store.selectedDeck?.source, "paste")
         try expectEqual(store.selectedItem?.id, "draft-1")
         try expect(store.librarySummaries.contains { $0.id == store.selectedDeckID && $0.itemCount == 1 })
+
+        let selectedDeckID = store.selectedDeckID
+        let backgroundCount = store.saveImportDraft(
+            ImportDraft(
+                name: "后台导入",
+                source: "translation job",
+                items: [
+                    ImportDraftItem(
+                        id: "background-draft",
+                        sourceChinese: "后台写入题库。",
+                        targetEnglish: "Background imports preserve the current deck.",
+                        blankText: "Background"
+                    )
+                ]
+            ),
+            selectAfterSave: false
+        )
+        try expectEqual(backgroundCount, 1)
+        try expectEqual(store.selectedDeckID, selectedDeckID)
+    },
+    UnitTest(name: "PracticeStore exports and imports encrypted binary archives") {
+        let exportDirectory = try temporaryDirectory()
+        let importDirectory = try temporaryDirectory()
+        let legacyDirectory = try temporaryDirectory()
+        defer {
+            removeTemporaryDirectory(exportDirectory)
+            removeTemporaryDirectory(importDirectory)
+            removeTemporaryDirectory(legacyDirectory)
+        }
+        let exportingStore = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: exportDirectory,
+                legacyApplicationSupportDirectory: legacyDirectory,
+                seedItemsProvider: { [] }
+            )
+        )
+        _ = exportingStore.saveImportDraft(
+            ImportDraft(
+                name: "加密题库",
+                source: "unit",
+                items: [
+                    ImportDraftItem(
+                        id: "encrypted-item",
+                        sourceChinese: "加密归档会保留题目。",
+                        targetEnglish: "Encrypted archives preserve practice items.",
+                        blankText: "Encrypted, practice"
+                    )
+                ]
+            )
+        )
+
+        let data = try exportingStore.encryptedArchiveData(password: "secret")
+        try expect(!data.isEmpty)
+
+        let importingStore = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: importDirectory,
+                legacyApplicationSupportDirectory: legacyDirectory,
+                seedItemsProvider: { [] }
+            )
+        )
+        let importedCount = try importingStore.importEncryptedArchiveData(data, password: "secret")
+
+        try expectEqual(importedCount, 1)
+        try expectEqual(importingStore.selectedDeck?.name, "加密题库")
+        try expectEqual(importingStore.selectedItem?.targetEnglish, "Encrypted archives preserve practice items.")
+
+        do {
+            _ = try importingStore.importEncryptedArchiveData(data, password: "wrong")
+            try fail("expected wrong password to fail")
+        } catch let error as PracticeArchiveError {
+            try expectEqual(error.errorDescription ?? "", "加密题库文件格式无效，或密码不正确。")
+        }
     },
     UnitTest(name: "PracticeStore renames updates deletes deck and items") {
         let directory = try temporaryDirectory()
@@ -1475,10 +1565,13 @@ let aiTextServiceTests: [UnitTest] = [
                     blankText: "Practice",
                     translatedChinese: "练习会建立信心。",
                     status: .translated,
-                    errorMessage: nil
+                    errorMessage: nil,
+                    retryCount: 0
                 )
             ],
-            errorMessage: nil
+            errorMessage: nil,
+            processingStartedAt: nil,
+            itemsCompletedAtStart: 0
         )
         try library.save([savedJob])
         try expectEqual(library.loadJobs(), [savedJob])
@@ -1495,7 +1588,92 @@ let aiTextServiceTests: [UnitTest] = [
         try expect(!translatingJob.canStart)
         try expect(translatingJob.canPause)
 
+        var evaluatingJob = readyJob
+        evaluatingJob.status = .evaluating
+        evaluatingJob.items[0].status = .evaluating
+        try expect(!evaluatingJob.canStart)
+        try expect(evaluatingJob.canPause)
+
         try expectEqual(savedJob.items[0].effectiveChinese, "练习会建立信心。")
+
+        var mixedJob = savedJob
+        mixedJob.status = .ready
+        mixedJob.items = [
+            TranslationJobItem(
+                id: "eval-item", sourceChinese: "评估中", targetEnglish: "Test.",
+                blankText: "Test", translatedChinese: nil, status: .pendingEvaluation,
+                errorMessage: nil, retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "discard-item", sourceChinese: "丢弃", targetEnglish: "Test 2.",
+                blankText: "Test", translatedChinese: nil, status: .discarded,
+                errorMessage: nil, retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "eval-fail-item", sourceChinese: "评估失败", targetEnglish: "Test 3.",
+                blankText: "Test", translatedChinese: nil, status: .evaluationFailed,
+                errorMessage: "fail", retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "translated-item", sourceChinese: "已翻译", targetEnglish: "Test 4.",
+                blankText: "Test", translatedChinese: "翻译完成", status: .translated,
+                errorMessage: nil, retryCount: 0
+            )
+        ]
+        try expectEqual(mixedJob.discardedCount, 1)
+        try expectEqual(mixedJob.failedCount, 1)
+        try expectEqual(mixedJob.pendingCount, 1)
+        try expectEqual(mixedJob.translatedCount, 1)
+        try expect(mixedJob.canStart)
+
+        var trackingJob = savedJob
+        trackingJob.items = [
+            TranslationJobItem(
+                id: "t1", sourceChinese: "c", targetEnglish: "a",
+                blankText: "a", translatedChinese: "c", status: .translated,
+                errorMessage: nil, retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "t2", sourceChinese: "c", targetEnglish: "b",
+                blankText: "b", translatedChinese: nil, status: .evaluating,
+                errorMessage: nil, retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "t3", sourceChinese: "c", targetEnglish: "c",
+                blankText: "c", translatedChinese: nil, status: .discarded,
+                errorMessage: nil, retryCount: 0
+            ),
+            TranslationJobItem(
+                id: "t4", sourceChinese: "c", targetEnglish: "d",
+                blankText: "d", translatedChinese: nil, status: .pendingEvaluation,
+                errorMessage: nil, retryCount: 0
+            )
+        ]
+        try expectEqual(trackingJob.processedCount, 2)
+
+        trackingJob.processingStartedAt = Date().addingTimeInterval(-10)
+        trackingJob.itemsCompletedAtStart = 0
+        let eta = trackingJob.estimatedSecondsRemaining
+        try expect(eta != nil)
+        if let eta {
+            try expect(eta > 0)
+        }
+
+        trackingJob.itemsCompletedAtStart = 2
+        try expect(trackingJob.estimatedSecondsRemaining == nil)
+
+        var doneJob = savedJob
+        doneJob.items = [
+            TranslationJobItem(
+                id: "d1", sourceChinese: "c", targetEnglish: "a",
+                blankText: "a", translatedChinese: "c", status: .translated,
+                errorMessage: nil, retryCount: 0
+            )
+        ]
+        doneJob.processingStartedAt = Date().addingTimeInterval(-10)
+        doneJob.itemsCompletedAtStart = 0
+        try expect(doneJob.estimatedSecondsRemaining == nil)
+
         try expectEqual(
             TranslationJobItem(
                 id: "fallback",
@@ -1504,7 +1682,8 @@ let aiTextServiceTests: [UnitTest] = [
                 blankText: "Practice",
                 translatedChinese: nil,
                 status: .pending,
-                errorMessage: nil
+                errorMessage: nil,
+                retryCount: 0
             ).effectiveChinese,
             "待翻译"
         )
@@ -1531,7 +1710,9 @@ let aiTextServiceTests: [UnitTest] = [
         )
 
         try runAsync {
-            let client = SequencedAICompletionClient(results: [.success(#"["专注练习会建立信心。"]"#)])
+            let client = PipelineTestClient(translations: [
+                "Focused practice builds confidence.": "专注练习会建立信心。"
+            ])
             let store = await MainActor.run {
                 TranslationJobStore(
                     library: library,
@@ -1560,12 +1741,55 @@ let aiTextServiceTests: [UnitTest] = [
             try expectEqual(draft.items.first?.targetEnglish, "Focused practice builds confidence.")
 
             await MainActor.run {
+                store.markImportedToLibrary(jobID: jobID)
+            }
+            let importedJob = try require(library.loadJobs().first { $0.id == jobID })
+            try expect(importedJob.importedToLibraryAt != nil)
+
+            await MainActor.run {
                 store.deleteJob(jobID)
             }
             try expect(!library.loadJobs().contains { $0.id == jobID })
         }
     },
-    UnitTest(name: "TranslationJobStore imports files folders pauses and retries failed translations") {
+    UnitTest(name: "TranslationJobStore evaluates items as not valuable and marks them discarded") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let library = TranslationJobLibrary(applicationSupportDirectory: directory)
+
+        try runAsync {
+            let client = PipelineTestClient(evaluationResults: [false])
+            let store = await MainActor.run {
+                TranslationJobStore(
+                    library: library,
+                    aiTextService: AITextService(client: client),
+                    importBatchByteLimit: 120
+                )
+            }
+            let jobID = await MainActor.run {
+                store.importText(
+                    "Trivial sentence.",
+                    name: "丢弃测试",
+                    source: "粘贴文本",
+                    provider: readyProvider()
+                )
+            }
+            try await waitForMainActor {
+                store.jobs.first { $0.id == jobID }?.status == .completed
+                    || store.jobs.first { $0.id == jobID }?.status == .failed
+            }
+            try await MainActor.run {
+                let job = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(job.discardedCount, 1)
+                try expectEqual(job.translatedCount, 0)
+                store.confirmDiscard(jobID: jobID)
+                let updatedJob = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(updatedJob.items.count, 0)
+                store.deleteJob(jobID)
+            }
+        }
+    },
+    UnitTest(name: "TranslationJobStore imports files folders evaluates translates and handles discarded items") {
         let directory = try temporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
 
@@ -1580,10 +1804,9 @@ let aiTextServiceTests: [UnitTest] = [
         )
 
         try runAsync {
-            let client = SequencedAICompletionClient(results: [
-                .failure(TestError(message: "temporary failure")),
-                .success(#"["耐心倾听会改善发音。"]"#),
-                .success(#"["每日重复会建立流利回忆。"]"#)
+            let client = PipelineTestClient(translations: [
+                "Patient listening improves pronunciation.": "耐心倾听会改善发音。",
+                "Daily repetition builds fluent recall.": "每日重复会建立流利回忆。"
             ])
             let store = await MainActor.run {
                 TranslationJobStore(
@@ -1597,20 +1820,15 @@ let aiTextServiceTests: [UnitTest] = [
                 store.importFiles([file], name: "文件任务", provider: readyProvider())
             }
             try await waitForMainActor {
-                store.jobs.first { $0.id == fileJobID }?.status == .failed
+                store.jobs.first { $0.id == fileJobID }?.status == .completed
             }
             try await MainActor.run {
                 let job = try require(store.jobs.first { $0.id == fileJobID })
-                try expectEqual(job.failedCount, 1)
+                try expectEqual(job.translatedCount, 1)
+                try expectEqual(job.failedCount, 0)
                 try expectEqual(job.pendingCount, 0)
                 try expect(!job.canStart)
                 try expect(!job.canPause)
-                store.pause(jobID: fileJobID)
-                try expectEqual(store.jobs.first { $0.id == fileJobID }?.status, .failed)
-                store.retryFailed(jobID: fileJobID, provider: readyProvider())
-            }
-            try await waitForMainActor {
-                store.jobs.first { $0.id == fileJobID }?.status == .completed
             }
 
             let folderJobID = await MainActor.run {
@@ -1727,6 +1945,67 @@ let aiTextServiceTests: [UnitTest] = [
             _ = try await service.explainAnswer(for: sampleItem(), answers: [:], using: readyProvider())
 
             try expect(client.lastUserPrompt?.contains("学生答案 \"未作答\"") == true)
+        }
+    },
+    UnitTest(name: "AITextService evaluates sentence value returning bool array") {
+        let client = FakeAICompletionClient(response: #"prefix [true, false, true] suffix"#)
+        let service = AITextService(client: client)
+
+        try runAsync {
+            let results = try await service.evaluateSentenceValue(
+                ["Good sentence.", "Short.", "Useful phrase."],
+                using: readyProvider()
+            )
+
+            try expectEqual(results, [true, false, true])
+            try expect(client.lastUserPrompt?.contains("评估") == true)
+            try expect(client.lastUserPrompt?.contains("1. Good sentence.") == true)
+            try expect(client.lastUserPrompt?.contains("2. Short.") == true)
+            try expect(client.lastUserPrompt?.contains("3. Useful phrase.") == true)
+        }
+    },
+    UnitTest(name: "AITextService evaluateSentenceValue throws on count mismatch") {
+        let service = AITextService(client: FakeAICompletionClient(response: "[true]"))
+        try runAsync {
+            do {
+                _ = try await service.evaluateSentenceValue(["One.", "Two."], using: readyProvider())
+                try fail("expected throw")
+            } catch let error as AITextServiceError {
+                try expectEqual(
+                    error.errorDescription ?? "",
+                    "AI 返回的翻译数量不匹配，期望 2 条，实际 1 条。"
+                )
+            }
+        }
+    },
+    UnitTest(name: "AITextService evaluateSentenceValue skips empty input") {
+        let client = FakeAICompletionClient(response: "[]")
+        let service = AITextService(client: client)
+
+        try runAsync {
+            let results = try await service.evaluateSentenceValue(["  ", "\n"], using: readyProvider())
+            try expectEqual(results, [])
+        }
+    },
+    UnitTest(name: "AITextService evaluateSentenceValue parses true/false text fallback") {
+        let service = AITextService(client: FakeAICompletionClient(response: "true\nfalse\ntrue"))
+        try runAsync {
+            let results = try await service.evaluateSentenceValue(
+                ["One.", "Two.", "Three."],
+                using: readyProvider()
+            )
+            try expectEqual(results, [true, false, true])
+        }
+    },
+    UnitTest(name: "AITextService evaluateSentenceValue throws on unparseable bool response") {
+        let service = AITextService(client: FakeAICompletionClient(response: "   \n  "))
+        try runAsync {
+            do {
+                _ = try await service.evaluateSentenceValue(["One."], using: readyProvider())
+                try fail("expected throw")
+            } catch let error as AITextServiceError {
+                try expectEqual(error.errorDescription ?? "", "AI 返回格式无法解析。")
+            }
         }
     },
     UnitTest(name: "OpenAICompatibleAIClient rejects incomplete provider before network") {
@@ -1884,6 +2163,31 @@ func readyProvider() -> AIProviderConfig {
         createdAt: Date(timeIntervalSince1970: 1),
         updatedAt: Date(timeIntervalSince1970: 1)
     )
+}
+
+private final class PipelineTestClient: AICompletionClient, @unchecked Sendable {
+    let translations: [String: String]
+    let evaluationResults: [Bool]
+    private var evalIndex: Int = 0
+
+    init(translations: [String: String] = [:], evaluationResults: [Bool] = []) {
+        self.translations = translations
+        self.evaluationResults = evaluationResults
+    }
+
+    func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String {
+        if userPrompt.contains("评估") {
+            let result = evalIndex < evaluationResults.count ? evaluationResults[evalIndex] : true
+            evalIndex += 1
+            return "[\(result)]"
+        }
+        for (sentence, translation) in translations {
+            if userPrompt.contains(sentence) {
+                return "[\"\(translation)\"]"
+            }
+        }
+        return "[\"翻译\"]"
+    }
 }
 
 private final class FakeAICompletionClient: AICompletionClient, @unchecked Sendable {

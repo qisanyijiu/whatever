@@ -1,6 +1,6 @@
 import Foundation
 
-struct AIProviderLibrary {
+struct AIProviderLibrary: @unchecked Sendable {
     private let fileManager: FileManager
     private let secretStore: SecretStore
     private let applicationSupportOverride: URL?

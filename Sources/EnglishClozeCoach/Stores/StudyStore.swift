@@ -211,7 +211,7 @@ final class StudyStore: ObservableObject {
             )
         }
 
-        save()
+        scheduleBackgroundSave()
     }
 
     func recordCompletion(item: PracticeItem, wrongBlankCount: Int) {
@@ -238,7 +238,7 @@ final class StudyStore: ObservableObject {
             data.history = Array(data.history.prefix(100))
         }
 
-        save()
+        scheduleBackgroundSave()
     }
 
     private func updateReviewState(itemID: PracticeItem.ID, wrongBlankCount: Int) {
@@ -275,6 +275,8 @@ final class StudyStore: ObservableObject {
         }
     }
 
+    private var saveThrottleTask: Task<Void, Never>?
+
     private func save() {
         data.updatedAt = Date()
         do {
@@ -282,6 +284,16 @@ final class StudyStore: ObservableObject {
             saveError = nil
         } catch {
             saveError = "保存学习记录失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func scheduleBackgroundSave() {
+        data.updatedAt = Date()
+        let snapshot = data
+        let lib = library
+        saveThrottleTask?.cancel()
+        saveThrottleTask = Task.detached(priority: .background) {
+            _ = try? lib.save(snapshot)
         }
     }
 }

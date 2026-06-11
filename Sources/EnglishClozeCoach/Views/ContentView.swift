@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var explanationText: String?
     @State private var isExplaining = false
     @State private var explanationTask: Task<Void, Never>?
+    @State private var autoImportedTranslationJobIDs = Set<TranslationJob.ID>()
 
     private let speechService = SpeechService()
     private let aiTextService = AITextService()
@@ -94,6 +95,12 @@ struct ContentView: View {
             if page != .practice {
                 clearExplanation()
             }
+        }
+        .onChange(of: translationJobStore.jobs) {
+            autoImportCompletedTranslationJobs()
+        }
+        .onAppear {
+            autoImportCompletedTranslationJobs()
         }
         .onDisappear {
             celebrationTask?.cancel()
@@ -324,5 +331,29 @@ struct ContentView: View {
         explanationTask = nil
         explanationText = nil
         isExplaining = false
+    }
+
+    private func autoImportCompletedTranslationJobs() {
+        for job in translationJobStore.jobs where job.status == .completed {
+            guard job.importedToLibraryAt == nil else {
+                continue
+            }
+            guard !autoImportedTranslationJobIDs.contains(job.id) else {
+                continue
+            }
+            autoImportedTranslationJobIDs.insert(job.id)
+
+            guard let draft = translationJobStore.importDraft(for: job.id) else {
+                autoImportedTranslationJobIDs.remove(job.id)
+                continue
+            }
+
+            let savedCount = store.saveImportDraft(draft, selectAfterSave: false)
+            if savedCount > 0 {
+                translationJobStore.markImportedToLibrary(jobID: job.id)
+            } else {
+                autoImportedTranslationJobIDs.remove(job.id)
+            }
+        }
     }
 }

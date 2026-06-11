@@ -40,6 +40,43 @@ struct AITextService: Sendable {
         return translations
     }
 
+    func evaluateSentenceValue(_ englishSentences: [String], using provider: AIProviderConfig) async throws -> [Bool] {
+        let sentences = englishSentences
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !sentences.isEmpty else {
+            return []
+        }
+
+        let numberedSentences = sentences.enumerated()
+            .map { index, sentence in "\(index + 1). \(sentence)" }
+            .joined(separator: "\n")
+
+        let content = try await client.complete(
+            provider: provider,
+            systemPrompt: """
+            You evaluate English sentences for cloze practice value.
+            A valuable sentence: has meaningful vocabulary/grammar, is complete and coherent, \
+            is not too short or trivial, and offers real learning value for intermediate learners.
+            Return ONLY a JSON array of booleans (true = keep, false = discard). \
+            Same order and count as input.
+            """,
+            userPrompt: """
+            评估以下英文句子是否值得加入完形填空题库。有价值的句子应包含有意义的词汇或语法点，\
+            结构完整，不过于简单或琐碎。返回 JSON 布尔数组，true 表示有价值，false 表示无价值。
+
+            \(numberedSentences)
+            """
+        )
+
+        let results = try parseBoolArray(from: content)
+        guard results.count == sentences.count else {
+            throw AITextServiceError.unexpectedTranslationCount(expected: sentences.count, actual: results.count)
+        }
+        return results
+    }
+
     func explainAnswer(for item: PracticeItem, answers: [String: String], using provider: AIProviderConfig) async throws -> String {
         let answerLines = item.blanks.enumerated().map { index, blank in
             let userAnswer = answers[blank.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -68,6 +105,36 @@ struct AITextService: Sendable {
             请解释每个空的正确答案、常见误区，以及一个短小记忆提示。
             """
         )
+    }
+
+    private func parseBoolArray(from content: String) throws -> [Bool] {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jsonText: String
+        if let startIndex = trimmedContent.firstIndex(of: "["),
+           let endIndex = trimmedContent.lastIndex(of: "]"),
+           startIndex <= endIndex {
+            jsonText = String(trimmedContent[startIndex...endIndex])
+        } else {
+            jsonText = trimmedContent
+        }
+
+        let data = Data(jsonText.utf8)
+        do {
+            return try JSONDecoder().decode([Bool].self, from: data)
+        } catch {
+            let lowercased = jsonText.lowercased()
+            if lowercased.contains("true") || lowercased.contains("false") {
+                return trimmedContent
+                    .split(whereSeparator: \.isNewline)
+                    .flatMap { line in
+                        line.split(separator: ",")
+                            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t[]\"'")) }
+                    }
+                    .filter { !$0.isEmpty }
+                    .map { $0.lowercased() == "true" }
+            }
+            throw AITextServiceError.invalidResponse
+        }
     }
 
     private func parseStringArray(from content: String) throws -> [String] {

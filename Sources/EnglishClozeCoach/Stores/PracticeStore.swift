@@ -108,7 +108,7 @@ final class PracticeStore: ObservableObject {
     }
 
     @discardableResult
-    func saveImportDraft(_ draft: ImportDraft) -> Int {
+    func saveImportDraft(_ draft: ImportDraft, selectAfterSave: Bool = true) -> Int {
         let importedItems = importer.practiceItems(from: draft)
         guard !importedItems.isEmpty else {
             importError = "没有生成题目。"
@@ -127,9 +127,23 @@ final class PracticeStore: ObservableObject {
         )
         decks.append(deck)
         saveDecks()
-        selectDeck(deck.id)
+        if selectAfterSave {
+            selectDeck(deck.id)
+        } else {
+            refreshLibrarySummaries()
+        }
         importError = nil
         return importedItems.count
+    }
+
+    func encryptedArchiveData(password: String) throws -> Data {
+        try library.exportEncryptedArchive(decks: decks, password: password)
+    }
+
+    @discardableResult
+    func importEncryptedArchiveData(_ data: Data, password: String) throws -> Int {
+        let importedDecks = try library.importEncryptedArchive(data, password: password)
+        return appendImportedDecks(importedDecks)
     }
 
     @discardableResult
@@ -308,11 +322,89 @@ final class PracticeStore: ObservableObject {
     }
 
     private func saveDecks() {
+        refreshLibrarySummaries()
         do {
             try library.save(decks)
-            refreshLibrarySummaries()
         } catch {
             importError = "保存题库失败：\(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    private func appendImportedDecks(_ importedDecks: [PracticeDeck]) -> Int {
+        var existingDeckIDs = Set(decks.map(\.id))
+        var existingDeckNames = Set(decks.map(\.name))
+        var existingItemIDs = Set(decks.flatMap { $0.items.map(\.id) })
+        var importedCount = 0
+        var normalizedDecks: [PracticeDeck] = []
+
+        for deck in importedDecks where !deck.items.isEmpty {
+            let deckID = existingDeckIDs.contains(deck.id) ? "deck-\(UUID().uuidString)" : deck.id
+            existingDeckIDs.insert(deckID)
+
+            let normalizedItems = deck.items.map { item in
+                let itemID = existingItemIDs.contains(item.id) ? "imported-\(UUID().uuidString)" : item.id
+                existingItemIDs.insert(itemID)
+                guard itemID != item.id else {
+                    return item
+                }
+                return PracticeItem(
+                    id: itemID,
+                    sourceChinese: item.sourceChinese,
+                    targetEnglish: item.targetEnglish,
+                    segments: remappedBlankIDs(in: item.segments, itemID: itemID)
+                )
+            }
+
+            let deckName = uniqueDeckName(deck.name, existingNames: existingDeckNames)
+            existingDeckNames.insert(deckName)
+            importedCount += normalizedItems.count
+            normalizedDecks.append(PracticeDeck(
+                id: deckID,
+                name: deckName,
+                source: deck.source,
+                createdAt: Date(),
+                updatedAt: Date(),
+                items: normalizedItems
+            ))
+        }
+
+        guard importedCount > 0 else {
+            importError = "加密题库中没有可导入的题目。"
+            return 0
+        }
+
+        decks.append(contentsOf: normalizedDecks)
+        saveDecks()
+        if let firstImportedDeckID = normalizedDecks.first?.id {
+            selectDeck(firstImportedDeckID)
+        }
+        importError = nil
+        return importedCount
+    }
+
+    private func uniqueDeckName(_ name: String, existingNames: Set<String>) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = trimmed.isEmpty ? "导入题库" : trimmed
+        guard existingNames.contains(baseName) else {
+            return baseName
+        }
+
+        var index = 2
+        while existingNames.contains("\(baseName) \(index)") {
+            index += 1
+        }
+        return "\(baseName) \(index)"
+    }
+
+    private func remappedBlankIDs(in segments: [ClozeSegment], itemID: PracticeItem.ID) -> [ClozeSegment] {
+        var blankIndex = 0
+        return segments.map { segment in
+            guard case let .blank(blank) = segment else {
+                return segment
+            }
+            blankIndex += 1
+            return .blank(ClozeBlank(id: "\(itemID)-blank-\(blankIndex)", answer: blank.answer))
         }
     }
 }
