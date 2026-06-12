@@ -143,7 +143,13 @@ final class PracticeStore: ObservableObject {
     @discardableResult
     func importEncryptedArchiveData(_ data: Data, password: String) throws -> Int {
         let importedDecks = try library.importEncryptedArchive(data, password: password)
-        return appendImportedDecks(importedDecks)
+        return appendImportedDecks(importedDecks, emptyMessage: "加密题库中没有可导入的题目。")
+    }
+
+    @discardableResult
+    func importLocalLibraryFileData(_ data: Data, fileName: String) throws -> Int {
+        let importedDecks = try library.localLibraryFileDecks(from: data, fileName: fileName)
+        return appendImportedDecks(importedDecks, emptyMessage: "本地题库文件中没有可导入的题目。")
     }
 
     @discardableResult
@@ -187,6 +193,71 @@ final class PracticeStore: ObservableObject {
         } else {
             refreshLibrarySummaries()
         }
+    }
+
+    @discardableResult
+    func importDeckToDatabase(_ deckID: PracticeDeck.ID) -> Int {
+        guard let sourceDeckIndex = decks.firstIndex(where: { $0.id == deckID }) else {
+            importError = "没有找到要入库的题库。"
+            return 0
+        }
+        let sourceDeck = decks[sourceDeckIndex]
+        guard !sourceDeck.items.isEmpty else {
+            importError = "这个题库没有可入库的题目。"
+            return 0
+        }
+
+        var updatedDecks = decks
+        let now = Date()
+        let importedItems: [PracticeItem]
+        let targetDeckID: PracticeDeck.ID
+
+        if let targetDeckIndex = databaseTargetDeckIndex(excluding: deckID) {
+            var targetDeck = updatedDecks[targetDeckIndex]
+            importedItems = copiedDatabaseItems(from: sourceDeck.items, existingItems: targetDeck.items)
+            guard !importedItems.isEmpty else {
+                importError = "这个题库没有新的可入库题目。"
+                return 0
+            }
+
+            targetDeck.items.append(contentsOf: importedItems)
+            targetDeck.updatedAt = now
+            updatedDecks[targetDeckIndex] = targetDeck
+            targetDeckID = targetDeck.id
+        } else {
+            importedItems = copiedDatabaseItems(from: sourceDeck.items, existingItems: [])
+            guard !importedItems.isEmpty else {
+                importError = "这个题库没有新的可入库题目。"
+                return 0
+            }
+
+            let targetDeck = PracticeDeck(
+                id: "database-\(UUID().uuidString)",
+                name: "本机保存题库",
+                source: "SQLite 数据库题库",
+                createdAt: now,
+                updatedAt: now,
+                items: importedItems
+            )
+            updatedDecks.insert(targetDeck, at: 0)
+            targetDeckID = targetDeck.id
+        }
+
+        let previousDecks = decks
+        decks = updatedDecks
+        importError = nil
+        saveDecks()
+        guard importError == nil else {
+            decks = previousDecks
+            refreshLibrarySummaries()
+            return 0
+        }
+        if selectedDeckID == targetDeckID {
+            selectDeck(targetDeckID)
+        } else {
+            refreshLibrarySummaries()
+        }
+        return importedItems.count
     }
 
     func deleteItem(_ itemID: PracticeItem.ID, in deckID: PracticeDeck.ID) {
@@ -331,7 +402,7 @@ final class PracticeStore: ObservableObject {
     }
 
     @discardableResult
-    private func appendImportedDecks(_ importedDecks: [PracticeDeck]) -> Int {
+    private func appendImportedDecks(_ importedDecks: [PracticeDeck], emptyMessage: String) -> Int {
         var existingDeckIDs = Set(decks.map(\.id))
         var existingDeckNames = Set(decks.map(\.name))
         var existingItemIDs = Set(decks.flatMap { $0.items.map(\.id) })
@@ -370,7 +441,7 @@ final class PracticeStore: ObservableObject {
         }
 
         guard importedCount > 0 else {
-            importError = "加密题库中没有可导入的题目。"
+            importError = emptyMessage
             return 0
         }
 
@@ -395,6 +466,68 @@ final class PracticeStore: ObservableObject {
             index += 1
         }
         return "\(baseName) \(index)"
+    }
+
+    private func databaseTargetDeckIndex(excluding sourceDeckID: PracticeDeck.ID) -> Int? {
+        if let index = decks.firstIndex(where: { $0.id != sourceDeckID && $0.name == "本机保存题库" }) {
+            return index
+        }
+        if let index = decks.firstIndex(where: {
+            $0.id != sourceDeckID && ($0.source == "SQLite 数据库题库" || $0.source == "旧版导入数据")
+        }) {
+            return index
+        }
+        return decks.firstIndex { deck in
+            deck.id != sourceDeckID && deck.id != "seed" && !isLocalFileDeck(deck)
+        }
+    }
+
+    private func copiedDatabaseItems(from sourceItems: [PracticeItem], existingItems: [PracticeItem]) -> [PracticeItem] {
+        var existingSignatures = Set(existingItems.map(itemSignature))
+        var copiedItems: [PracticeItem] = []
+
+        for item in sourceItems {
+            let signature = itemSignature(item)
+            guard !existingSignatures.contains(signature) else {
+                continue
+            }
+
+            existingSignatures.insert(signature)
+            let itemID = "database-item-\(UUID().uuidString)"
+            copiedItems.append(PracticeItem(
+                id: itemID,
+                sourceChinese: item.sourceChinese,
+                targetEnglish: item.targetEnglish,
+                segments: remappedBlankIDs(in: item.segments, itemID: itemID)
+            ))
+        }
+
+        return copiedItems
+    }
+
+    private func itemSignature(_ item: PracticeItem) -> String {
+        [
+            item.sourceChinese,
+            item.targetEnglish
+        ]
+        .map {
+            $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }
+        .joined(separator: "\n")
+    }
+
+    private func isLocalFileDeck(_ deck: PracticeDeck) -> Bool {
+        if deck.name == "本地文件题库" || deck.source.contains("本地文件") || deck.source.contains("英文文件") {
+            return true
+        }
+
+        let lowercasedSource = deck.source.lowercased()
+        return [
+            ".txt", ".text", ".md", ".markdown", ".srt", ".vtt", ".html", ".htm",
+            ".csv", ".tsv", ".json", ".jsonl", ".log", ".sub", ".sbv", ".ass", ".ssa"
+        ].contains { lowercasedSource.hasSuffix($0) }
     }
 
     private func remappedBlankIDs(in segments: [ClozeSegment], itemID: PracticeItem.ID) -> [ClozeSegment] {

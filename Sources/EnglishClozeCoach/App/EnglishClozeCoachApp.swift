@@ -17,6 +17,7 @@ struct EnglishClozeCoachApp: App {
     @StateObject private var studyStore = StudyStore()
     @StateObject private var aiStore = AIProviderStore()
     @StateObject private var translationJobStore = TranslationJobStore()
+    @StateObject private var systemTranslator = SystemTranslationCoordinator()
 
     var body: some Scene {
         WindowGroup("whatever", id: "main") {
@@ -27,7 +28,8 @@ struct EnglishClozeCoachApp: App {
                         sessionStore: sessionStore,
                         studyStore: studyStore,
                         aiStore: aiStore,
-                        translationJobStore: translationJobStore
+                        translationJobStore: translationJobStore,
+                        systemTranslator: systemTranslator
                     )
                     .id(sessionStore.currentUser?.id)
                 } else {

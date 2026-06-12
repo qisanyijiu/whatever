@@ -2,10 +2,16 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct SystemTranslatedDraft {
+    let draft: ImportDraft
+    let failedCount: Int
+}
+
 struct ImportView: View {
     @ObservedObject var store: PracticeStore
     @ObservedObject var aiStore: AIProviderStore
     @ObservedObject var translationJobStore: TranslationJobStore
+    @ObservedObject var systemTranslator: SystemTranslationCoordinator
     var onJobCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -18,6 +24,8 @@ struct ImportView: View {
     @State private var isDownloadingScript = false
     @State private var isReadingFiles = false
     @State private var isReadingFolder = false
+    @State private var isSavingFilesToDatabase = false
+    @State private var isSavingFolderToDatabase = false
     @State private var draftItems: [ImportDraftItem] = []
     @State private var isPreviewing = false
     @State private var isTranslating = false
@@ -25,6 +33,9 @@ struct ImportView: View {
     @State private var translationFailedItemIDs = Set<ImportDraftItem.ID>()
     @State private var translationCompletedCount = 0
     @State private var translationTotalCount = 0
+    @State private var systemTranslationCompletedCount = 0
+    @State private var systemTranslationTotalCount = 0
+    @State private var systemTranslationFailureCount = 0
     @State private var activeTranslationRunID: UUID?
 
     private let tedDownloader = TEDTranscriptDownloader()
@@ -34,7 +45,12 @@ struct ImportView: View {
     private let importBatchByteLimit = 512 * 1024
 
     private var isDownloadingContent: Bool {
-        isDownloadingTED || isDownloadingScript || isReadingFiles || isReadingFolder
+        isDownloadingTED
+            || isDownloadingScript
+            || isReadingFiles
+            || isReadingFolder
+            || isSavingFilesToDatabase
+            || isSavingFolderToDatabase
     }
 
     var body: some View {
@@ -50,7 +66,7 @@ struct ImportView: View {
             }
         }
         .padding(24)
-        .frame(width: isPreviewing ? 860 : 680, height: isPreviewing ? 680 : 580)
+        .frame(width: isPreviewing ? 860 : 760, height: isPreviewing ? 680 : 640)
     }
 
     private var sourceContent: some View {
@@ -100,50 +116,83 @@ struct ImportView: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(.separator, lineWidth: 1)
-                }
+            }
 
             messageView
+            systemTranslationProgressView
 
-            HStack {
-                Button {
-                    chooseTextFiles()
-                } label: {
-                    if isReadingFiles {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("读取中")
-                    } else {
-                        Label("选择多个本地文件", systemImage: "doc.on.doc")
+            VStack(spacing: 10) {
+                HStack {
+                    Button {
+                        chooseTextFiles()
+                    } label: {
+                        if isReadingFiles {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("读取中")
+                        } else {
+                            Label("选择多个本地文件", systemImage: "doc.on.doc")
+                        }
                     }
-                }
-                .disabled(isDownloadingContent)
+                    .disabled(isDownloadingContent)
 
-                Button {
-                    chooseFolder()
-                } label: {
-                    if isReadingFolder {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("读取中")
-                    } else {
-                        Label("选择文件夹", systemImage: "folder")
+                    Button {
+                        chooseFolder()
+                    } label: {
+                        if isReadingFolder {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("读取中")
+                        } else {
+                            Label("选择文件夹", systemImage: "folder")
+                        }
                     }
-                }
-                .disabled(isDownloadingContent)
+                    .disabled(isDownloadingContent)
 
-                Spacer()
+                    Button {
+                        importTextFilesToDatabase()
+                    } label: {
+                        if isSavingFilesToDatabase {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("入库中")
+                        } else {
+                            Label("本地文件入库", systemImage: "externaldrive.badge.plus")
+                        }
+                    }
+                    .disabled(isDownloadingContent)
 
-                Button("取消") {
-                    dismiss()
+                    Button {
+                        importFolderToDatabase()
+                    } label: {
+                        if isSavingFolderToDatabase {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("入库中")
+                        } else {
+                            Label("文件夹入库", systemImage: "folder.badge.plus")
+                        }
+                    }
+                    .disabled(isDownloadingContent)
+
+                    Spacer(minLength: 0)
                 }
 
-                Button {
-                    generatePreview()
-                } label: {
-                    Label("创建任务", systemImage: "tray.and.arrow.down")
+                HStack {
+                    Spacer()
+
+                    Button("取消") {
+                        dismiss()
+                    }
+
+                    Button {
+                        generatePreview()
+                    } label: {
+                        Label("创建任务", systemImage: "tray.and.arrow.down")
+                    }
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
@@ -268,6 +317,24 @@ struct ImportView: View {
     }
 
     @ViewBuilder
+    private var systemTranslationProgressView: some View {
+        if (isSavingFilesToDatabase || isSavingFolderToDatabase), systemTranslationTotalCount > 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(
+                    value: Double(systemTranslationCompletedCount),
+                    total: Double(systemTranslationTotalCount)
+                )
+                Text(systemTranslationFailureCount > 0
+                    ? "正在使用 macOS 系统翻译 \(systemTranslationCompletedCount)/\(systemTranslationTotalCount)，失败 \(systemTranslationFailureCount)"
+                    : "正在使用 macOS 系统翻译 \(systemTranslationCompletedCount)/\(systemTranslationTotalCount)"
+                )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var messageView: some View {
         if let message {
             Text(message)
@@ -347,6 +414,146 @@ struct ImportView: View {
         isReadingFolder = false
         onJobCreated()
         dismiss()
+    }
+
+    private func importTextFilesToDatabase() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "本地文件入库"
+        panel.message = "选择后会直接生成题目并写入 SQLite 数据库。"
+        let localTypes = ["srt", "vtt", "md", "markdown", "html", "htm", "text"]
+            .compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = [.plainText, .text] + localTypes
+
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else {
+            return
+        }
+
+        isSavingFilesToDatabase = true
+        message = "正在写入数据库..."
+
+        let accessTokens = panel.urls.map { url in
+            (url: url, didStartAccessing: url.startAccessingSecurityScopedResource())
+        }
+        defer {
+            accessTokens
+                .filter(\.didStartAccessing)
+                .forEach { $0.url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let draft = try LocalFilePracticeDraftImporter(maximumBatchByteCount: importBatchByteLimit)
+                .importDraft(fromFiles: panel.urls, name: deckName)
+            saveLocalFileDraftToDatabase(draft) {
+                isSavingFilesToDatabase = false
+            }
+        } catch {
+            isSavingFilesToDatabase = false
+            message = "本地文件入库失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func importFolderToDatabase() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "文件夹入库"
+        panel.message = "选择后会直接生成题目并写入 SQLite 数据库。"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        isSavingFolderToDatabase = true
+        message = "正在写入数据库..."
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let draft = try LocalFilePracticeDraftImporter(maximumBatchByteCount: importBatchByteLimit)
+                .importDraft(fromFolder: url, name: deckName)
+            saveLocalFileDraftToDatabase(draft) {
+                isSavingFolderToDatabase = false
+            }
+        } catch {
+            isSavingFolderToDatabase = false
+            message = "本地文件入库失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func saveLocalFileDraftToDatabase(_ draft: ImportDraft, finish: @escaping () -> Void) {
+        systemTranslationCompletedCount = 0
+        systemTranslationFailureCount = 0
+        systemTranslationTotalCount = draft.items.count
+        message = "正在使用 macOS 系统翻译：0/\(draft.items.count)"
+
+        Task { @MainActor in
+            defer {
+                finish()
+                systemTranslationCompletedCount = 0
+                systemTranslationTotalCount = 0
+            }
+
+            do {
+                let result = try await draftTranslatedWithSystemAPI(draft)
+                let count = store.saveImportDraft(result.draft)
+                if count > 0 {
+                    if result.failedCount > 0 {
+                        message = "已入库 \(count) 题，\(result.failedCount) 题系统翻译失败，未写入数据库。"
+                    } else {
+                        dismiss()
+                    }
+                } else {
+                    message = result.failedCount > 0
+                        ? "macOS 系统翻译失败：没有成功翻译的题目。"
+                        : store.importError ?? "没有保存题目。"
+                }
+            } catch {
+                message = "macOS 系统翻译失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    @MainActor
+    private func draftTranslatedWithSystemAPI(_ draft: ImportDraft) async throws -> SystemTranslatedDraft {
+        let sourceTexts = draft.items.map(\.targetEnglish)
+        var failedIndexes = Set<Int>()
+        let translations = try await systemTranslator.translateEnglishToSimplifiedChinese(
+            sourceTexts,
+            progress: { index, _ in
+                systemTranslationCompletedCount = min(index + 1, sourceTexts.count)
+                message = "正在使用 macOS 系统翻译：\(systemTranslationCompletedCount)/\(sourceTexts.count)"
+            },
+            failure: { index, _, _ in
+                failedIndexes.insert(index)
+                systemTranslationFailureCount = failedIndexes.count
+                systemTranslationCompletedCount = min(index + 1, sourceTexts.count)
+                message = "正在使用 macOS 系统翻译：\(systemTranslationCompletedCount)/\(sourceTexts.count)，失败 \(systemTranslationFailureCount)"
+            }
+        )
+        var translatedDraft = draft
+        var translatedItems: [ImportDraftItem] = []
+
+        for index in translatedDraft.items.indices where translations.indices.contains(index) {
+            let translation = translations[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !translation.isEmpty {
+                translatedDraft.items[index].sourceChinese = translation
+                translatedItems.append(translatedDraft.items[index])
+            } else {
+                failedIndexes.insert(index)
+            }
+        }
+        translatedDraft.items = translatedItems
+
+        return SystemTranslatedDraft(draft: translatedDraft, failedCount: failedIndexes.count)
     }
 
     private func generatePreview() {

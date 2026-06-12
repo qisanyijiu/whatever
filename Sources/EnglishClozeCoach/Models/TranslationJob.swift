@@ -35,6 +35,16 @@ struct TranslationJobItem: Identifiable, Codable, Hashable {
         let translation = translatedChinese?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return translation.isEmpty ? sourceChinese : translation
     }
+
+    var canImportToLibrary: Bool {
+        status != .discarded && !targetEnglish.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var needsSystemTranslation: Bool {
+        canImportToLibrary
+            && translatedChinese == nil
+            && (status == .pendingEvaluation || status == .pending)
+    }
 }
 
 struct TranslationJobProgressSummary: Hashable {
@@ -47,7 +57,7 @@ struct TranslationJobProgressSummary: Hashable {
     var pendingCount: Int
 
     var processedCount: Int {
-        translatedCount + discardedCount
+        translatedCount + failedCount + discardedCount
     }
 
     var progressText: String {
@@ -99,6 +109,38 @@ struct TranslationJob: Identifiable, Codable, Hashable {
         }
 
         return summary
+    }
+
+    var importableLibraryItemCount: Int {
+        if isLocalFileSource {
+            return items.filter { $0.canImportToLibrary && $0.status == .translated }.count
+        }
+        return items.filter(\.canImportToLibrary).count
+    }
+
+    var canImportToLibrary: Bool {
+        importedToLibraryAt == nil
+            && importableLibraryItemCount > 0
+            && status != .importing
+            && status != .translating
+            && status != .evaluating
+    }
+
+    var isLocalFileSource: Bool {
+        if source == "本地文件" || source.contains("本地文件") || source.contains("文件夹") {
+            return true
+        }
+        let lowercasedSource = source.lowercased()
+        if source == "粘贴文本" || lowercasedSource.hasPrefix("http://") || lowercasedSource.hasPrefix("https://") {
+            return false
+        }
+        return importedFileCount > 0
+    }
+
+    var needsSystemTranslation: Bool {
+        isLocalFileSource
+            && (status == .ready || status == .paused)
+            && items.contains { $0.needsSystemTranslation }
     }
 
     var translatedCount: Int {

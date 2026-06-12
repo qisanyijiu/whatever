@@ -16,6 +16,7 @@ struct LibraryOverviewView: View {
     @State private var archiveError: String?
     @State private var archiveStatusMessage: String?
     @State private var isShowingArchiveSheet = false
+    @State private var databaseImportingDeckID: PracticeDeck.ID?
 
     private enum ArchiveMode {
         case export
@@ -81,6 +82,13 @@ struct LibraryOverviewView: View {
                             .textFieldStyle(.roundedBorder)
 
                         Button {
+                            importLocalLibraryFile()
+                        } label: {
+                            Label("文件入库", systemImage: "tray.and.arrow.down")
+                        }
+                        .help("将本地 JSON 题库文件转入 SQLite 数据库")
+
+                        Button {
                             beginArchive(.import)
                         } label: {
                             Label("导入", systemImage: "lock.open")
@@ -100,6 +108,12 @@ struct LibraryOverviewView: View {
                         Text(archiveStatusMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+
+                    if let archiveError {
+                        Text(archiveError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
 
                     itemList
@@ -160,6 +174,22 @@ struct LibraryOverviewView: View {
                                 editingItemID = nil
                             } label: {
                                 Label("练习", systemImage: "play")
+                            }
+
+                            if summary.isLocalFileLibrary {
+                                let isImporting = databaseImportingDeckID == summary.id
+                                Button {
+                                    importDeckToDatabase(summary)
+                                } label: {
+                                    if isImporting {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Image(systemName: "externaldrive.badge.plus")
+                                    }
+                                }
+                                .disabled(databaseImportingDeckID != nil)
+                                .help("将这个本地文件题库导入 SQLite 数据库")
                             }
 
                             Button(role: .destructive) {
@@ -389,6 +419,61 @@ struct LibraryOverviewView: View {
             refresh()
         } catch {
             archiveError = error.localizedDescription
+        }
+    }
+
+    private func importLocalLibraryFile() {
+        archiveError = nil
+        archiveStatusMessage = nil
+
+        do {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            panel.allowedContentTypes = [.json]
+            panel.message = "选择旧版 Decks.json 或 PracticeItems.json。"
+            panel.prompt = "转入数据库"
+            guard panel.runModal() == .OK, !panel.urls.isEmpty else {
+                return
+            }
+
+            var totalCount = 0
+            for url in panel.urls {
+                let data = try Data(contentsOf: url)
+                totalCount += try store.importLocalLibraryFileData(data, fileName: url.lastPathComponent)
+            }
+
+            if totalCount > 0 {
+                archiveStatusMessage = "已转入数据库 \(totalCount) 题。"
+            } else {
+                archiveError = store.importError ?? "本地题库文件中没有可导入的题目。"
+            }
+            refresh()
+        } catch {
+            archiveError = error.localizedDescription
+        }
+    }
+
+    private func importDeckToDatabase(_ summary: PracticeLibrarySummary) {
+        guard databaseImportingDeckID == nil else {
+            return
+        }
+        archiveError = nil
+        archiveStatusMessage = "正在将「\(summary.name)」导入数据库..."
+        databaseImportingDeckID = summary.id
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            let count = store.importDeckToDatabase(summary.id)
+            databaseImportingDeckID = nil
+            if count > 0 {
+                archiveStatusMessage = "已将「\(summary.name)」导入数据库 \(count) 题。"
+                refresh()
+            } else {
+                archiveStatusMessage = nil
+                archiveError = store.importError ?? "这个题库没有新的可入库题目。"
+            }
         }
     }
 

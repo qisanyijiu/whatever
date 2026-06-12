@@ -25,6 +25,11 @@ private actor ProcessingBuffer {
     }
 }
 
+struct TranslationJobSystemTranslationRequest: Hashable {
+    let itemID: TranslationJobItem.ID
+    let sourceText: String
+}
+
 @MainActor
 final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var jobs: [TranslationJob]
@@ -80,9 +85,9 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     func importFiles(
         _ urls: [URL],
         name: String,
-        provider: AIProviderConfig?
+        provider _: AIProviderConfig?
     ) -> TranslationJob.ID {
-        let job = createJob(name: name, source: "本地文件", providerID: provider?.id)
+        let job = createJob(name: name, source: "本地文件", providerID: nil)
         let byteLimit = importBatchByteLimit
         let jobID = job.id
         let task = Task.detached(priority: .userInitiated) { [weak self] in
@@ -99,7 +104,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
 
             await self?.runImport(
                 jobID: jobID,
-                provider: provider,
+                provider: nil,
                 folderImporter: folderImporter,
                 importer: importer
             ) {
@@ -118,9 +123,9 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     func importFolder(
         _ url: URL,
         name: String,
-        provider: AIProviderConfig?
+        provider _: AIProviderConfig?
     ) -> TranslationJob.ID {
-        let job = createJob(name: name, source: url.lastPathComponent.isEmpty ? "文件夹" : url.lastPathComponent, providerID: provider?.id)
+        let job = createJob(name: name, source: url.lastPathComponent.isEmpty ? "文件夹" : url.lastPathComponent, providerID: nil)
         let byteLimit = importBatchByteLimit
         let jobID = job.id
         let task = Task.detached(priority: .userInitiated) { [weak self] in
@@ -135,7 +140,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
 
             await self?.runImport(
                 jobID: jobID,
-                provider: provider,
+                provider: nil,
                 folderImporter: folderImporter,
                 importer: importer
             ) {
@@ -269,6 +274,23 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         startTranslation(jobID: jobID, provider: provider)
     }
 
+    func retrySystemTranslation(jobID: TranslationJob.ID) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+            for index in job.items.indices where job.items[index].status == .failed {
+                job.items[index].status = .pendingEvaluation
+                job.items[index].errorMessage = nil
+                job.items[index].retryCount = 0
+            }
+            job.status = .ready
+            job.errorMessage = nil
+            job.processingStartedAt = nil
+        }
+        saveJobsInBackground()
+    }
+
     func confirmDiscard(jobID: TranslationJob.ID) {
         updateJob(jobID) { job in
             job.items.removeAll { $0.status == .discarded }
@@ -300,7 +322,12 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         guard let job = jobs.first(where: { $0.id == jobID }), !job.items.isEmpty else {
             return nil
         }
-        let validItems = job.items.filter { $0.status == .translated || $0.status == .pending || $0.status == .translating }
+        let validItems: [TranslationJobItem]
+        if job.isLocalFileSource {
+            validItems = job.items.filter { $0.canImportToLibrary && $0.status == .translated }
+        } else {
+            validItems = job.items.filter(\.canImportToLibrary)
+        }
         guard !validItems.isEmpty else { return nil }
         return ImportDraft(
             id: job.id,
@@ -315,6 +342,167 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
                 )
             }
         )
+    }
+
+    func systemTranslationRequests(for jobID: TranslationJob.ID) -> [TranslationJobSystemTranslationRequest] {
+        guard let job = jobs.first(where: { $0.id == jobID }), job.isLocalFileSource else {
+            return []
+        }
+
+        return job.items.compactMap { item in
+            guard item.needsSystemTranslation else {
+                return nil
+            }
+            return TranslationJobSystemTranslationRequest(
+                itemID: item.id,
+                sourceText: item.targetEnglish
+            )
+        }
+    }
+
+    func markSystemTranslationStarted(jobID: TranslationJob.ID) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+            let startedAt = Date()
+            job.status = .translating
+            job.errorMessage = nil
+            job.processingStartedAt = startedAt
+            job.itemsCompletedAtStart = job.processedCount
+
+            for index in job.items.indices where job.items[index].needsSystemTranslation {
+                job.items[index].status = .translating
+                job.items[index].errorMessage = nil
+            }
+        }
+        saveJobsInBackground()
+    }
+
+    func applySystemTranslation(
+        jobID: TranslationJob.ID,
+        itemID: TranslationJobItem.ID,
+        translation: String
+    ) {
+        let trimmedTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranslation.isEmpty else {
+            return
+        }
+
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+
+            updateItem(itemID, in: &job) { item in
+                item.translatedChinese = trimmedTranslation
+                item.status = .translated
+                item.errorMessage = nil
+                item.retryCount = 0
+            }
+
+            if job.items.filter({ $0.status != .discarded }).allSatisfy({ $0.status == .translated }) {
+                job.status = .completed
+                job.errorMessage = nil
+                job.processingStartedAt = nil
+            } else {
+                job.status = .translating
+            }
+        }
+        saveJobsInBackground()
+    }
+
+    func markSystemTranslationItemFailed(
+        jobID: TranslationJob.ID,
+        itemID: TranslationJobItem.ID,
+        message: String
+    ) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+            updateItem(itemID, in: &job) { item in
+                item.status = .failed
+                item.errorMessage = message
+                item.retryCount += 1
+            }
+        }
+        saveJobsInBackground()
+    }
+
+    func applySystemTranslations(
+        jobID: TranslationJob.ID,
+        translationsByItemID: [TranslationJobItem.ID: String]
+    ) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+            var translatedCount = 0
+            for index in job.items.indices {
+                let itemID = job.items[index].id
+                guard let translation = translationsByItemID[itemID]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !translation.isEmpty else {
+                    continue
+                }
+                job.items[index].translatedChinese = translation
+                job.items[index].status = .translated
+                job.items[index].errorMessage = nil
+                job.items[index].retryCount = 0
+                translatedCount += 1
+            }
+
+            job.processingStartedAt = nil
+            if translatedCount > 0,
+               job.items.filter({ $0.status != .discarded }).allSatisfy({ $0.status == .translated }) {
+                job.status = .completed
+                job.errorMessage = nil
+            }
+        }
+        saveJobs()
+    }
+
+    func markSystemTranslationFailed(jobID: TranslationJob.ID, message: String) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+            job.status = .failed
+            job.errorMessage = message
+            job.processingStartedAt = nil
+            for index in job.items.indices where job.items[index].needsSystemTranslation || job.items[index].status == .translating {
+                job.items[index].status = .failed
+                job.items[index].errorMessage = message
+            }
+        }
+        saveJobs()
+    }
+
+    func finishSystemTranslation(jobID: TranslationJob.ID) {
+        updateJob(jobID) { job in
+            guard job.isLocalFileSource else {
+                return
+            }
+
+            for index in job.items.indices where job.items[index].status == .translating {
+                job.items[index].status = .failed
+                job.items[index].errorMessage = "macOS 系统翻译没有返回结果。"
+            }
+
+            job.processingStartedAt = nil
+            let summary = job.progressSummary
+            if summary.failedCount > 0 {
+                job.status = .failed
+                job.errorMessage = "\(summary.failedCount) 条句子 macOS 系统翻译失败。可以重试系统翻译，或先转入已翻译成功的题目。"
+            } else if job.items.filter({ $0.status != .discarded }).allSatisfy({ $0.status == .translated }) {
+                job.status = .completed
+                job.errorMessage = nil
+            } else {
+                job.status = .ready
+                job.errorMessage = nil
+            }
+        }
+        saveJobs()
     }
 
     // MARK: - Sync timer
@@ -530,7 +718,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
             job.errorMessage = job.items.isEmpty ? "没有生成题目。" : nil
         }
         importTasks[jobID] = nil
-        if !items.isEmpty {
+        if !items.isEmpty, let provider {
             startTranslation(jobID: jobID, provider: provider)
         }
     }

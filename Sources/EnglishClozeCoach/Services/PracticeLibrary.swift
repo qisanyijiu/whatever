@@ -3,17 +3,21 @@ import SQLite3
 
 enum PracticeLibraryError: LocalizedError {
     case sqlite(String)
+    case unsupportedLocalLibraryFile
 
     var errorDescription: String? {
         switch self {
         case let .sqlite(message):
             return "SQLite 题库错误：\(message)"
+        case .unsupportedLocalLibraryFile:
+            return "本地题库文件格式无效，支持 Decks.json 或 PracticeItems.json。"
         }
     }
 }
 
 struct PracticeLibrary: @unchecked Sendable {
     static let sqliteFileName = "PracticeLibrary.sqlite3"
+    static let legacyMigrationMarkerFileName = "PracticeLibraryLegacyMigration.done"
 
     private let fileManager: FileManager
     private let applicationSupportOverride: URL?
@@ -40,7 +44,7 @@ struct PracticeLibrary: @unchecked Sendable {
 
     func loadDecks() -> [PracticeDeck] {
         if let savedDecks = try? loadSQLiteDecks(), !savedDecks.isEmpty {
-            return savedDecks
+            return migrateLegacyFilesIfNeeded(into: savedDecks)
         }
 
         if let savedDecks = try? loadJSONDecks(), !savedDecks.isEmpty {
@@ -81,6 +85,31 @@ struct PracticeLibrary: @unchecked Sendable {
         try PracticeArchiveService().decryptDecks(from: data, password: password)
     }
 
+    func localLibraryFileDecks(from data: Data, fileName: String) throws -> [PracticeDeck] {
+        if let decks = try? decoder.decode([PracticeDeck].self, from: data) {
+            guard !decks.isEmpty else {
+                return []
+            }
+            return decks
+        }
+
+        if let items = try? decoder.decode([PracticeItem].self, from: data) {
+            guard !items.isEmpty else {
+                return []
+            }
+            return [
+                legacySavedDeck(
+                    items: items,
+                    id: "local-file-\(UUID().uuidString)",
+                    name: localLibraryName(from: fileName),
+                    source: "本地题库文件：\(fileName)"
+                )
+            ]
+        }
+
+        throw PracticeLibraryError.unsupportedLocalLibraryFile
+    }
+
     private func loadSQLiteDecks() throws -> [PracticeDeck] {
         let directory = try applicationSupportDirectory()
         let url = sqliteURL(in: directory)
@@ -92,13 +121,90 @@ struct PracticeLibrary: @unchecked Sendable {
     }
 
     private func loadJSONDecks() throws -> [PracticeDeck] {
-        let url = try applicationSupportDirectory().appendingPathComponent("Decks.json")
-        guard fileManager.fileExists(atPath: url.path) else {
-            return []
+        var decks: [PracticeDeck] = []
+        var firstError: Error?
+
+        for url in try legacyDeckFileURLs() where fileManager.fileExists(atPath: url.path) {
+            do {
+                let data = try Data(contentsOf: url)
+                decks.append(contentsOf: try decoder.decode([PracticeDeck].self, from: data))
+            } catch {
+                firstError = firstError ?? error
+            }
         }
 
-        let data = try Data(contentsOf: url)
-        return try decoder.decode([PracticeDeck].self, from: data)
+        if !decks.isEmpty {
+            return decks
+        }
+        if let firstError {
+            throw firstError
+        }
+        return []
+    }
+
+    private func migrateLegacyFilesIfNeeded(into decks: [PracticeDeck]) -> [PracticeDeck] {
+        guard let directory = try? applicationSupportDirectory() else {
+            return decks
+        }
+
+        let markerURL = directory.appendingPathComponent(Self.legacyMigrationMarkerFileName)
+        guard !fileManager.fileExists(atPath: markerURL.path) else {
+            return decks
+        }
+
+        let legacyDecks = legacyDecksForMigration()
+        guard !legacyDecks.isEmpty else {
+            return decks
+        }
+
+        let mergedDecks = mergeLegacyDecks(legacyDecks, into: decks)
+        if mergedDecks != decks {
+            do {
+                try save(mergedDecks)
+            } catch {
+                return decks
+            }
+        }
+
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? Data().write(to: markerURL, options: .atomic)
+        return mergedDecks
+    }
+
+    private func legacyDecksForMigration() -> [PracticeDeck] {
+        var decks = (try? loadJSONDecks()) ?? []
+        if let legacyItems = try? loadLegacySavedItems(), !legacyItems.isEmpty {
+            decks.append(legacySavedDeck(items: legacyItems))
+        }
+        return decks
+    }
+
+    private func mergeLegacyDecks(_ legacyDecks: [PracticeDeck], into decks: [PracticeDeck]) -> [PracticeDeck] {
+        var mergedDecks = decks
+        var existingItemIDs = Set(decks.flatMap { $0.items.map(\.id) })
+
+        for legacyDeck in legacyDecks where !legacyDeck.items.isEmpty {
+            if let deckIndex = mergedDecks.firstIndex(where: { $0.id == legacyDeck.id }) {
+                let newItems = legacyDeck.items.filter { item in
+                    guard !existingItemIDs.contains(item.id) else {
+                        return false
+                    }
+                    existingItemIDs.insert(item.id)
+                    return true
+                }
+
+                guard !newItems.isEmpty else {
+                    continue
+                }
+                mergedDecks[deckIndex].items.append(contentsOf: newItems)
+                mergedDecks[deckIndex].updatedAt = Date()
+            } else {
+                legacyDeck.items.forEach { existingItemIDs.insert($0.id) }
+                mergedDecks.append(legacyDeck)
+            }
+        }
+
+        return mergedDecks
     }
 
     private func seedDecks() -> [PracticeDeck] {
@@ -144,6 +250,45 @@ struct PracticeLibrary: @unchecked Sendable {
         return try decoder.decode([PracticeItem].self, from: data)
     }
 
+    private func legacySavedDeck(
+        items: [PracticeItem],
+        id: String = "legacy-saved",
+        name: String = "本机保存题库",
+        source: String = "旧版导入数据"
+    ) -> PracticeDeck {
+        PracticeDeck(
+            id: id,
+            name: name,
+            source: source,
+            createdAt: Date(),
+            updatedAt: Date(),
+            items: items
+        )
+    }
+
+    private func localLibraryName(from fileName: String) -> String {
+        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "本地文件题库"
+        }
+        if trimmed == "PracticeItems.json" {
+            return "本地文件题库"
+        }
+
+        let url = URL(fileURLWithPath: trimmed)
+        let name = url.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "本地文件题库" : name
+    }
+
+    private func legacyDeckFileURLs() throws -> [URL] {
+        let primaryURL = try applicationSupportDirectory().appendingPathComponent("Decks.json")
+        let legacyURL = try legacyApplicationSupportDirectory().appendingPathComponent("Decks.json")
+        guard primaryURL.path != legacyURL.path else {
+            return [primaryURL]
+        }
+        return [primaryURL, legacyURL]
+    }
+
     private func sqliteURL(in directory: URL) -> URL {
         directory.appendingPathComponent(Self.sqliteFileName)
     }
@@ -163,7 +308,13 @@ struct PracticeLibrary: @unchecked Sendable {
     }
 
     private func legacyApplicationSupportDirectory() throws -> URL {
-        try legacyApplicationSupportOverride ?? Self.defaultLegacyApplicationSupportDirectory(fileManager: fileManager)
+        if let legacyApplicationSupportOverride {
+            return legacyApplicationSupportOverride
+        }
+        if applicationSupportOverride != nil {
+            return try applicationSupportDirectory()
+        }
+        return try Self.defaultLegacyApplicationSupportDirectory(fileManager: fileManager)
     }
 
     static func defaultLegacyApplicationSupportDirectory(fileManager: FileManager = .default) throws -> URL {

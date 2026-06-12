@@ -292,7 +292,7 @@ struct TranslationJobsView: View {
         let summary = job.progressSummary
 
         return HStack {
-            if job.canPause {
+            if job.canPause && !job.isLocalFileSource {
                 Button {
                     jobStore.pause(jobID: job.id)
                 } label: {
@@ -300,7 +300,7 @@ struct TranslationJobsView: View {
                 }
             }
 
-            if job.canStart {
+            if job.canStart && !job.isLocalFileSource {
                 Button {
                     jobStore.startTranslation(jobID: job.id, provider: aiStore.activeProvider)
                 } label: {
@@ -308,11 +308,19 @@ struct TranslationJobsView: View {
                 }
             }
 
-            if summary.failedCount > 0 {
+            if summary.failedCount > 0 && !job.isLocalFileSource {
                 Button {
                     jobStore.retryFailed(jobID: job.id, provider: aiStore.activeProvider)
                 } label: {
                     Label("重试", systemImage: "arrow.clockwise")
+                }
+            }
+
+            if summary.failedCount > 0 && job.isLocalFileSource {
+                Button {
+                    jobStore.retrySystemTranslation(jobID: job.id)
+                } label: {
+                    Label("重试系统翻译", systemImage: "arrow.clockwise")
                 }
             }
 
@@ -328,18 +336,13 @@ struct TranslationJobsView: View {
                 saveJob(job)
             } label: {
                 if job.importedToLibraryAt == nil {
-                    Label("导入题库", systemImage: "tray.and.arrow.down")
+                    Label(job.isLocalFileSource ? "转入数据库" : "导入题库", systemImage: "tray.and.arrow.down")
                 } else {
                     Label("已入库", systemImage: "checkmark.circle")
                 }
             }
-            .disabled(
-                job.importedToLibraryAt != nil
-                    || job.items.isEmpty
-                    || job.status == .importing
-                    || job.status == .translating
-                    || job.status == .evaluating
-            )
+            .disabled(!job.canImportToLibrary)
+            .help(job.isLocalFileSource ? "将本地文件生成的题目写入 SQLite 数据库" : "将任务题目写入题库")
 
             Button {
                 jobStore.deleteJob(job.id)

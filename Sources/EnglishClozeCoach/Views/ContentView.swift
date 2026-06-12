@@ -15,6 +15,7 @@ struct ContentView: View {
     @ObservedObject var studyStore: StudyStore
     @ObservedObject var aiStore: AIProviderStore
     @ObservedObject var translationJobStore: TranslationJobStore
+    @ObservedObject var systemTranslator: SystemTranslationCoordinator
     @State private var isImporting = false
     @State private var page: Page = .practice
     @State private var celebrationItemID: PracticeItem.ID?
@@ -26,6 +27,7 @@ struct ContentView: View {
     @State private var isExplaining = false
     @State private var explanationTask: Task<Void, Never>?
     @State private var autoImportedTranslationJobIDs = Set<TranslationJob.ID>()
+    @State private var systemTranslatingJobIDs = Set<TranslationJob.ID>()
 
     private let speechService = SpeechService()
     private let aiTextService = AITextService()
@@ -77,6 +79,11 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .overlay {
+            if #available(macOS 15.0, *) {
+                SystemTranslationTaskView(coordinator: systemTranslator)
+            }
+        }
         .animation(.easeInOut(duration: 0.24), value: isCelebrating)
         .animation(.easeInOut(duration: 0.18), value: page)
         .onChange(of: store.answers) {
@@ -97,9 +104,11 @@ struct ContentView: View {
             }
         }
         .onChange(of: translationJobStore.jobs) {
+            translateLocalFileJobsWithSystemAPI()
             autoImportCompletedTranslationJobs()
         }
         .onAppear {
+            translateLocalFileJobsWithSystemAPI()
             autoImportCompletedTranslationJobs()
         }
         .onDisappear {
@@ -205,7 +214,8 @@ struct ContentView: View {
             ImportView(
                 store: store,
                 aiStore: aiStore,
-                translationJobStore: translationJobStore
+                translationJobStore: translationJobStore,
+                systemTranslator: systemTranslator
             ) {
                 page = .jobs
             }
@@ -331,6 +341,64 @@ struct ContentView: View {
         explanationTask = nil
         explanationText = nil
         isExplaining = false
+    }
+
+    private func translateLocalFileJobsWithSystemAPI() {
+        for job in translationJobStore.jobs where job.needsSystemTranslation {
+            guard !systemTranslatingJobIDs.contains(job.id) else {
+                continue
+            }
+            systemTranslatingJobIDs.insert(job.id)
+
+            Task { @MainActor in
+                let requests = translationJobStore.systemTranslationRequests(for: job.id)
+                guard !requests.isEmpty else {
+                    systemTranslatingJobIDs.remove(job.id)
+                    return
+                }
+
+                do {
+                    translationJobStore.markSystemTranslationStarted(jobID: job.id)
+                    let translations = try await systemTranslator.translateEnglishToSimplifiedChinese(
+                        requests.map(\.sourceText),
+                        progress: { index, translation in
+                            guard requests.indices.contains(index) else {
+                                return
+                            }
+                            translationJobStore.applySystemTranslation(
+                                jobID: job.id,
+                                itemID: requests[index].itemID,
+                                translation: translation
+                            )
+                        },
+                        failure: { index, _, error in
+                            guard requests.indices.contains(index) else {
+                                return
+                            }
+                            translationJobStore.markSystemTranslationItemFailed(
+                                jobID: job.id,
+                                itemID: requests[index].itemID,
+                                message: "macOS 系统翻译失败：\(error.localizedDescription)"
+                            )
+                        }
+                    )
+                    let translationsByItemID = Dictionary(
+                        uniqueKeysWithValues: zip(requests.map(\.itemID), translations)
+                    )
+                    translationJobStore.applySystemTranslations(
+                        jobID: job.id,
+                        translationsByItemID: translationsByItemID
+                    )
+                    translationJobStore.finishSystemTranslation(jobID: job.id)
+                } catch {
+                    translationJobStore.markSystemTranslationFailed(
+                        jobID: job.id,
+                        message: "macOS 系统翻译失败：\(error.localizedDescription)"
+                    )
+                }
+                systemTranslatingJobIDs.remove(job.id)
+            }
+        }
     }
 
     private func autoImportCompletedTranslationJobs() {

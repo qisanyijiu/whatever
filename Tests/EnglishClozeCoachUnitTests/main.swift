@@ -419,6 +419,45 @@ let coreLearningTests: [UnitTest] = [
         try expectEqual(batches.reduce(0) { $0 + $1.fileCount }, 3)
         try expect(batches.allSatisfy { !$0.text.isEmpty && $0.byteCount == $0.text.utf8.count })
     },
+    UnitTest(name: "LocalFilePracticeDraftImporter creates database drafts from local files") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+
+        let firstFile = directory.appendingPathComponent("01.txt")
+        let secondFile = directory.appendingPathComponent("02.txt")
+        try "Direct local file import writes useful English sentences into the database.".write(
+            to: firstFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try "One click database import keeps the local file workflow short.".write(
+            to: secondFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let draft = try LocalFilePracticeDraftImporter(maximumBatchByteCount: 120)
+            .importDraft(fromFiles: [firstFile, secondFile], name: "导入题库")
+
+        try expectEqual(draft.name, "本地文件题库")
+        try expectEqual(draft.source, "本地文件（2 个英文文件）")
+        try expectEqual(draft.items.count, 2)
+
+        let storeDirectory = directory.appendingPathComponent("store")
+        let store = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: storeDirectory,
+                seedItemsProvider: { [] }
+            )
+        )
+        let savedCount = store.saveImportDraft(draft)
+
+        try expectEqual(savedCount, 2)
+        try expectEqual(store.selectedDeck?.name, "本地文件题库")
+        try expect(FileManager.default.fileExists(
+            atPath: storeDirectory.appendingPathComponent(PracticeLibrary.sqliteFileName).path
+        ))
+    },
     UnitTest(name: "FolderTextImporter streams folders in size limited batches") {
         let directory = try temporaryDirectory().appendingPathComponent("Batch Folder", isDirectory: true)
         defer { removeTemporaryDirectory(directory.deletingLastPathComponent()) }
@@ -609,6 +648,27 @@ let practiceStoreTests: [UnitTest] = [
         try expect(FileManager.default.fileExists(
             atPath: directory.appendingPathComponent(PracticeLibrary.sqliteFileName).path
         ))
+    },
+    UnitTest(name: "PracticeLibrary merges legacy file decks into existing SQLite once") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let library = PracticeLibrary(applicationSupportDirectory: directory)
+        try library.save([sampleDeck(id: "saved", items: [sampleItem(id: "saved-item")])])
+
+        let jsonData = try JSONEncoder().encode([
+            sampleDeck(id: "json-deck", items: [sampleItem(id: "json-item")])
+        ])
+        try jsonData.write(to: directory.appendingPathComponent("Decks.json"))
+
+        let loadedDecks = library.loadDecks()
+
+        try expectEqual(loadedDecks.map(\.id), ["saved", "json-deck"])
+        try expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(PracticeLibrary.legacyMigrationMarkerFileName).path
+        ))
+
+        try library.save([sampleDeck(id: "saved", items: [sampleItem(id: "saved-item")])])
+        try expectEqual(library.loadDecks().map(\.id), ["saved"])
     },
     UnitTest(name: "PracticeLibrary migrates legacy flat saved items") {
         let directory = try temporaryDirectory()
@@ -877,6 +937,107 @@ let practiceStoreTests: [UnitTest] = [
         } catch let error as PracticeArchiveError {
             try expectEqual(error.errorDescription ?? "", "加密题库文件格式无效，或密码不正确。")
         }
+    },
+    UnitTest(name: "PracticeStore imports local file libraries into SQLite") {
+        let directory = try temporaryDirectory()
+        let legacyDirectory = try temporaryDirectory()
+        defer {
+            removeTemporaryDirectory(directory)
+            removeTemporaryDirectory(legacyDirectory)
+        }
+        let store = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: directory,
+                legacyApplicationSupportDirectory: legacyDirectory,
+                seedItemsProvider: { [] }
+            )
+        )
+
+        let deckData = try JSONEncoder().encode([
+            sampleDeck(id: "plain-deck", items: [sampleItem(id: "plain-item")])
+        ])
+        let deckImportCount = try store.importLocalLibraryFileData(deckData, fileName: "Decks.json")
+
+        try expectEqual(deckImportCount, 1)
+        try expectEqual(store.selectedDeck?.id, "plain-deck")
+        try expectEqual(store.selectedDeck?.name, "测试题库")
+
+        let flatData = try JSONEncoder().encode([sampleItem(id: "plain-item")])
+        let flatImportCount = try store.importLocalLibraryFileData(flatData, fileName: "PracticeItems.json")
+
+        try expectEqual(flatImportCount, 1)
+        try expectEqual(store.selectedDeck?.name, "本地文件题库")
+        try expectEqual(store.decks.count, 2)
+        try expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(PracticeLibrary.sqliteFileName).path
+        ))
+
+        let reloadedDecks = PracticeLibrary(
+            applicationSupportDirectory: directory,
+            legacyApplicationSupportDirectory: legacyDirectory,
+            seedItemsProvider: { [] }
+        )
+        .loadDecks()
+        try expectEqual(reloadedDecks.reduce(0) { $0 + $1.items.count }, 2)
+    },
+    UnitTest(name: "PracticeStore imports displayed local file decks into SQLite") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let store = PracticeStore(
+            library: PracticeLibrary(
+                applicationSupportDirectory: directory,
+                seedItemsProvider: { [] }
+            )
+        )
+
+        _ = store.saveImportDraft(
+            ImportDraft(
+                name: "本机保存题库",
+                source: "SQLite 数据库题库",
+                items: [
+                    ImportDraftItem(
+                        id: "database-item",
+                        sourceChinese: "数据库题库已有题。",
+                        targetEnglish: "The database library already has one item.",
+                        blankText: "database"
+                    )
+                ]
+            )
+        )
+        let databaseDeckID = try require(store.selectedDeckID)
+
+        _ = store.saveImportDraft(
+            ImportDraft(
+                name: "本地文件题库",
+                source: "本地文件（2 个英文文件）",
+                items: [
+                    ImportDraftItem(
+                        id: "local-file-library-item",
+                        sourceChinese: "本地文件可以直接入库。",
+                        targetEnglish: "Local file libraries can be imported directly.",
+                        blankText: "Local, imported"
+                    )
+                ]
+            )
+        )
+        let deckID = try require(store.selectedDeckID)
+        let summary = try require(store.librarySummaries.first { $0.id == deckID })
+
+        try expect(summary.isLocalFileLibrary)
+        try expectEqual(store.importDeckToDatabase(deckID), 1)
+        try expectEqual(store.decks.first { $0.id == databaseDeckID }?.items.count, 2)
+        try expectEqual(store.decks.first { $0.id == deckID }?.items.count, 1)
+
+        try expectEqual(store.importDeckToDatabase(deckID), 0)
+        try expectEqual(store.decks.first { $0.id == databaseDeckID }?.items.count, 2)
+
+        let reloadedDecks = PracticeLibrary(
+            applicationSupportDirectory: directory,
+            seedItemsProvider: { [] }
+        )
+        .loadDecks()
+        try expectEqual(reloadedDecks.first { $0.id == databaseDeckID }?.items.count, 2)
+        try expectEqual(reloadedDecks.first { $0.id == deckID }?.items.count, 1)
     },
     UnitTest(name: "PracticeStore renames updates deletes deck and items") {
         let directory = try temporaryDirectory()
@@ -1789,6 +1950,90 @@ let aiTextServiceTests: [UnitTest] = [
             }
         }
     },
+    UnitTest(name: "TranslationJobStore imports pending local file jobs into library drafts") {
+        let directory = try temporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+
+        let file = directory.appendingPathComponent("local lesson.txt")
+        try "Local files can become database questions without waiting for translation.".write(
+            to: file,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try runAsync {
+            let store = await MainActor.run {
+                TranslationJobStore(
+                    library: TranslationJobLibrary(applicationSupportDirectory: directory.appendingPathComponent("jobs")),
+                    importBatchByteLimit: 120
+                )
+            }
+
+            let jobID = await MainActor.run {
+                store.importFiles([file], name: "本地文件任务", provider: nil)
+            }
+            try await waitForMainActor {
+                store.jobs.first { $0.id == jobID }?.status == .ready
+            }
+
+            try await MainActor.run {
+                let job = try require(store.jobs.first { $0.id == jobID })
+                try expect(job.isLocalFileSource)
+                try expect(job.needsSystemTranslation)
+                try expect(!job.canImportToLibrary)
+                try expectEqual(job.importableLibraryItemCount, 0)
+                let requests = store.systemTranslationRequests(for: jobID)
+                try expectEqual(requests.count, 1)
+
+                try expect(store.importDraft(for: jobID) == nil)
+
+                store.markSystemTranslationStarted(jobID: jobID)
+                let translatingJob = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(translatingJob.status, .translating)
+                try expectEqual(translatingJob.progressSummary.activeCount, 1)
+                try expectEqual(translatingJob.progressText, "0/1")
+                try expect(!translatingJob.canImportToLibrary)
+
+                store.markSystemTranslationItemFailed(
+                    jobID: jobID,
+                    itemID: requests[0].itemID,
+                    message: "macOS 系统翻译失败：Unable To translate"
+                )
+                store.finishSystemTranslation(jobID: jobID)
+                let failedJob = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(failedJob.status, .failed)
+                try expectEqual(failedJob.failedCount, 1)
+                try expectEqual(failedJob.processedCount, 1)
+                try expect(!failedJob.needsSystemTranslation)
+                try expect(!failedJob.canImportToLibrary)
+
+                store.retrySystemTranslation(jobID: jobID)
+                let retryJob = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(retryJob.status, .ready)
+                try expect(retryJob.needsSystemTranslation)
+                try expectEqual(store.systemTranslationRequests(for: jobID).count, 1)
+
+                store.markSystemTranslationStarted(jobID: jobID)
+                store.applySystemTranslation(
+                    jobID: jobID,
+                    itemID: requests[0].itemID,
+                    translation: "本地文件无需等待翻译即可成为数据库题目。"
+                )
+                let completedJob = try require(store.jobs.first { $0.id == jobID })
+                try expectEqual(completedJob.status, .completed)
+                try expectEqual(completedJob.progressText, "1/1")
+                try expect(completedJob.canImportToLibrary)
+
+                let draft = try require(store.importDraft(for: jobID))
+                try expectEqual(draft.name, "本地文件任务")
+                try expectEqual(draft.source, "local lesson.txt")
+                try expectEqual(
+                    draft.items.first?.targetEnglish,
+                    "Local files can become database questions without waiting for translation."
+                )
+            }
+        }
+    },
     UnitTest(name: "TranslationJobStore imports files folders evaluates translates and handles discarded items") {
         let directory = try temporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -1820,24 +2065,46 @@ let aiTextServiceTests: [UnitTest] = [
                 store.importFiles([file], name: "文件任务", provider: readyProvider())
             }
             try await waitForMainActor {
-                store.jobs.first { $0.id == fileJobID }?.status == .completed
+                store.jobs.first { $0.id == fileJobID }?.status == .ready
             }
             try await MainActor.run {
                 let job = try require(store.jobs.first { $0.id == fileJobID })
-                try expectEqual(job.translatedCount, 1)
-                try expectEqual(job.failedCount, 0)
-                try expectEqual(job.pendingCount, 0)
-                try expect(!job.canStart)
-                try expect(!job.canPause)
+                try expect(job.needsSystemTranslation)
+                try expectEqual(client.requestCount, 0)
+                let requests = store.systemTranslationRequests(for: fileJobID)
+                try expectEqual(requests.map(\.sourceText), ["Patient listening improves pronunciation."])
+                store.markSystemTranslationStarted(jobID: fileJobID)
+                let translatingJob = try require(store.jobs.first { $0.id == fileJobID })
+                try expectEqual(translatingJob.status, .translating)
+                try expectEqual(translatingJob.progressSummary.activeCount, 1)
+                try expectEqual(translatingJob.progressText, "0/1")
+                store.applySystemTranslation(
+                    jobID: fileJobID,
+                    itemID: requests[0].itemID,
+                    translation: "耐心倾听会改善发音。"
+                )
+                let translatedJob = try require(store.jobs.first { $0.id == fileJobID })
+                try expectEqual(translatedJob.status, .completed)
+                try expectEqual(translatedJob.translatedCount, 1)
+                try expectEqual(translatedJob.failedCount, 0)
+                try expectEqual(translatedJob.pendingCount, 0)
+                try expect(!translatedJob.canStart)
+                try expect(!translatedJob.canPause)
             }
 
             let folderJobID = await MainActor.run {
                 store.importFolder(folder, name: "文件夹任务", provider: readyProvider())
             }
             try await waitForMainActor {
-                store.jobs.first { $0.id == folderJobID }?.status == .completed
+                store.jobs.first { $0.id == folderJobID }?.status == .ready
             }
             try await MainActor.run {
+                let folderRequests = store.systemTranslationRequests(for: folderJobID)
+                try expectEqual(folderRequests.map(\.sourceText), ["Daily repetition builds fluent recall."])
+                store.applySystemTranslations(
+                    jobID: folderJobID,
+                    translationsByItemID: [folderRequests[0].itemID: "每日重复会建立流利回忆。"]
+                )
                 let folderJob = try require(store.jobs.first { $0.id == folderJobID })
                 try expectEqual(folderJob.importedFileCount, 1)
                 try expectEqual(folderJob.translatedCount, 1)
@@ -1849,6 +2116,7 @@ let aiTextServiceTests: [UnitTest] = [
 
                 store.startTranslation(jobID: folderJobID, provider: nil)
                 try expectEqual(store.jobs.first { $0.id == folderJobID }?.status, .completed)
+                try expectEqual(client.requestCount, 0)
                 store.deleteJob(folderJobID)
                 try expect(store.importDraft(for: folderJobID) == nil)
             }
@@ -2169,6 +2437,7 @@ private final class PipelineTestClient: AICompletionClient, @unchecked Sendable 
     let translations: [String: String]
     let evaluationResults: [Bool]
     private var evalIndex: Int = 0
+    private(set) var requestCount = 0
 
     init(translations: [String: String] = [:], evaluationResults: [Bool] = []) {
         self.translations = translations
@@ -2176,6 +2445,7 @@ private final class PipelineTestClient: AICompletionClient, @unchecked Sendable 
     }
 
     func complete(provider: AIProviderConfig, systemPrompt: String, userPrompt: String) async throws -> String {
+        requestCount += 1
         if userPrompt.contains("评估") {
             let result = evalIndex < evaluationResults.count ? evaluationResults[evalIndex] : true
             evalIndex += 1
