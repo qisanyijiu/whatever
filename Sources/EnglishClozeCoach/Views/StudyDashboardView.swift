@@ -73,7 +73,7 @@ struct StudyDashboardView: View {
                     .frame(width: 96)
 
                 Button {
-                    practiceStore.startCustomPractice(items: dueItems, title: "今日复习")
+                    practiceStore.startCustomPractice(items: dueItems, title: "今日复习", studyData: studyStore.data)
                     onStartPractice()
                 } label: {
                     Label("练今日复习", systemImage: "calendar.badge.clock")
@@ -81,7 +81,7 @@ struct StudyDashboardView: View {
                 .disabled(dueItems.isEmpty)
 
                 Button {
-                    practiceStore.startCustomPractice(items: mistakeItems, title: "错题复习")
+                    practiceStore.startCustomPractice(items: mistakeItems, title: "错题复习", studyData: studyStore.data)
                     onStartPractice()
                 } label: {
                     Label("练错题", systemImage: "exclamationmark.arrow.triangle.2.circlepath")

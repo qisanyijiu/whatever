@@ -4,8 +4,12 @@ import SwiftUI
 struct PracticeDetailView: View {
     let item: PracticeItem
     @ObservedObject var store: PracticeStore
+    @ObservedObject var studyStore: StudyStore
     let explanation: String?
     let isExplaining: Bool
+    @StateObject private var focusAdvancer = ClozeBlankFocusAdvanceController()
+    @StateObject private var timingTracker = BlankInputTimingTracker()
+    @FocusState private var focusedBlankID: ClozeBlank.ID?
 
     var body: some View {
         VStack(spacing: 36) {
@@ -23,7 +27,38 @@ struct PracticeDetailView: View {
                             .font(.system(size: 34, weight: .medium))
                             .fixedSize()
                     case let .blank(blank):
-                        ClozeBlankField(blank: blank, store: store)
+                        ClozeBlankField(
+                            blank: blank,
+                            store: store,
+                            focusedBlankID: $focusedBlankID,
+                            locksCorrectAnswers: true
+                        ) { changedBlank, answer, state in
+                            timingTracker.inputChanged(
+                                blank: changedBlank,
+                                text: answer,
+                                isCorrect: state == .correct
+                            ) { secondsPerLetter, wordStartDelay in
+                                studyStore.recordInputTiming(
+                                    item: item,
+                                    secondsPerLetter: secondsPerLetter,
+                                    wordStartDelay: wordStartDelay
+                                )
+                            }
+
+                            if state == .correct {
+                                focusAdvancer.schedule(
+                                    after: changedBlank,
+                                    expectedAnswer: answer,
+                                    blanks: item.blanks,
+                                    currentFocusedID: { focusedBlankID },
+                                    currentAnswer: { store.answerText(for: $0) },
+                                    isCorrect: { store.answerState(for: $0) == .correct },
+                                    focus: { focusedBlankID = $0 }
+                                )
+                            } else {
+                                focusAdvancer.cancel()
+                            }
+                        }
                     }
                 }
             }
@@ -35,6 +70,27 @@ struct PracticeDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.18), value: explanation)
         .animation(.easeInOut(duration: 0.18), value: isExplaining)
+        .onAppear {
+            focusFirstOpenBlank()
+        }
+        .onChange(of: item.id) {
+            focusAdvancer.cancel()
+            timingTracker.reset()
+            focusFirstOpenBlank()
+        }
+        .onChange(of: focusedBlankID) {
+            timingTracker.focusChanged(to: focusedBlankID)
+        }
+        .onDisappear {
+            focusAdvancer.cancel()
+        }
+    }
+
+    private func focusFirstOpenBlank() {
+        focusedBlankID = item.blanks.first { blank in
+            store.answerState(for: blank) != .correct
+        }?.id
+        timingTracker.focusChanged(to: focusedBlankID)
     }
 
     @ViewBuilder

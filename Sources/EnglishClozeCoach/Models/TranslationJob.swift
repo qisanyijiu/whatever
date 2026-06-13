@@ -21,6 +21,30 @@ enum TranslationJobItemStatus: String, Codable, Hashable {
     case failed
 }
 
+enum TranslationJobSourceKind: Hashable {
+    case localFile
+    case pastedText
+    case remoteURL
+    case other
+
+    static func inferred(source: String, importedFileCount: Int) -> TranslationJobSourceKind {
+        if source == "本地文件" || source.contains("本地文件") || source.contains("文件夹") {
+            return .localFile
+        }
+        let lowercasedSource = source.lowercased()
+        if source == "粘贴文本" {
+            return .pastedText
+        }
+        if lowercasedSource.hasPrefix("http://") || lowercasedSource.hasPrefix("https://") {
+            return .remoteURL
+        }
+        if importedFileCount > 0 {
+            return .localFile
+        }
+        return .other
+    }
+}
+
 struct TranslationJobItem: Identifiable, Codable, Hashable {
     let id: String
     var sourceChinese: String
@@ -126,15 +150,12 @@ struct TranslationJob: Identifiable, Codable, Hashable {
             && status != .evaluating
     }
 
+    var sourceKind: TranslationJobSourceKind {
+        TranslationJobSourceKind.inferred(source: source, importedFileCount: importedFileCount)
+    }
+
     var isLocalFileSource: Bool {
-        if source == "本地文件" || source.contains("本地文件") || source.contains("文件夹") {
-            return true
-        }
-        let lowercasedSource = source.lowercased()
-        if source == "粘贴文本" || lowercasedSource.hasPrefix("http://") || lowercasedSource.hasPrefix("https://") {
-            return false
-        }
-        return importedFileCount > 0
+        sourceKind == .localFile
     }
 
     var needsSystemTranslation: Bool {

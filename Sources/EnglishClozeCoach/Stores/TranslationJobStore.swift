@@ -1,30 +1,5 @@
 import Foundation
 
-private struct ItemUpdate: Sendable {
-    let itemID: TranslationJobItem.ID
-    let status: TranslationJobItemStatus
-    let translatedChinese: String?
-    let errorMessage: String?
-}
-
-private actor ProcessingBuffer {
-    private var updates: [TranslationJob.ID: [String: ItemUpdate]] = [:]
-
-    func record(jobID: TranslationJob.ID, update: ItemUpdate) {
-        updates[jobID, default: [:]][update.itemID] = update
-    }
-
-    func drain(jobID: TranslationJob.ID) -> [ItemUpdate] {
-        let result = updates[jobID]?.values.map { $0 } ?? []
-        updates[jobID] = nil
-        return result
-    }
-
-    func discard(jobID: TranslationJob.ID) {
-        updates[jobID] = nil
-    }
-}
-
 struct TranslationJobSystemTranslationRequest: Hashable {
     let itemID: TranslationJobItem.ID
     let sourceText: String
@@ -36,7 +11,6 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     @Published var selectedJobID: TranslationJob.ID?
     @Published private(set) var errorMessage: String?
 
-    private let library: TranslationJobLibrary
     private let importer: QuestionImporter
     private let folderImporter: FolderTextImporter
     private let aiTextService: AITextService
@@ -44,8 +18,9 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     private var importTasks: [TranslationJob.ID: Task<Void, Never>] = [:]
     private var translationTasks: [TranslationJob.ID: Task<Void, Never>] = [:]
     private var syncTimer: Timer?
-    private var backgroundSaveTask: Task<Void, Never>?
-    private let buffer = ProcessingBuffer()
+    private let buffer = TranslationJobProcessingBuffer()
+    private let pipeline = TranslationJobPipeline()
+    private let persistence: TranslationJobPersistenceCoordinator
 
     init(
         library: TranslationJobLibrary = TranslationJobLibrary(),
@@ -54,11 +29,11 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         aiTextService: AITextService = AITextService(),
         importBatchByteLimit: Int = 512 * 1024
     ) {
-        self.library = library
         self.importer = importer
         self.folderImporter = folderImporter
         self.aiTextService = aiTextService
         self.importBatchByteLimit = importBatchByteLimit
+        self.persistence = TranslationJobPersistenceCoordinator(library: library)
         self.jobs = Self.restoredJobs(from: library.loadJobs())
         self.selectedJobID = jobs.first?.id
         saveJobsInBackground()
@@ -67,7 +42,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
 
     isolated deinit {
         syncTimer?.invalidate()
-        backgroundSaveTask?.cancel()
+        persistence.cancel()
         importTasks.values.forEach { $0.cancel() }
         translationTasks.values.forEach { $0.cancel() }
     }
@@ -213,13 +188,15 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
 
         let aiTextService = self.aiTextService
         let buffer = self.buffer
+        let pipeline = self.pipeline
         let task = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             await self.runJobPipeline(
                 jobID: jobID,
                 provider: provider,
                 aiTextService: aiTextService,
-                buffer: buffer
+                buffer: buffer,
+                pipeline: pipeline
             )
         }
         translationTasks[jobID] = task
@@ -549,7 +526,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func applyUpdates(jobID: TranslationJob.ID, updates: [ItemUpdate]) {
+    private func applyUpdates(jobID: TranslationJob.ID, updates: [TranslationJobItemUpdate]) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         let itemIndicesByID = Dictionary(uniqueKeysWithValues: jobs[index].items.indices.map { itemIndex in
             (jobs[index].items[itemIndex].id, itemIndex)
@@ -579,36 +556,20 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
     // MARK: - Persistence
 
     private func saveJobs() {
-        let snapshot = jobs
-        let lib = library
-        do {
-            try lib.save(snapshot)
+        if let message = persistence.save(jobs) {
+            errorMessage = message
+        } else {
             errorMessage = nil
-        } catch {
-            errorMessage = "保存翻译任务失败：\(error.localizedDescription)"
         }
     }
 
     private func saveJobsInBackground() {
-        backgroundSaveTask?.cancel()
-        let snapshot = jobs
-        let lib = library
-        backgroundSaveTask = Task.detached(priority: .background) {
-            guard !Task.isCancelled else { return }
-            do {
-                try lib.save(snapshot)
-            } catch {
-                await MainActor.run {
-                    // errorMessage silently updated; caller's responsibility to surface
-                }
-            }
+        persistence.saveInBackground(jobs) { [weak self] message in
+            self?.errorMessage = message
         }
     }
 
     // MARK: - Constants and restore
-
-    private nonisolated static let maxRetryCount = 5
-    private nonisolated static let maxConcurrency = 12
 
     private static func restoredJobs(from jobs: [TranslationJob]) -> [TranslationJob] {
         jobs.map { job in
@@ -729,7 +690,8 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         jobID: TranslationJob.ID,
         provider: AIProviderConfig,
         aiTextService: AITextService,
-        buffer: ProcessingBuffer
+        buffer: TranslationJobProcessingBuffer,
+        pipeline: TranslationJobPipeline
     ) async {
         while true {
             if Task.isCancelled {
@@ -749,7 +711,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
                 return
             }
 
-            await processItemsOnBackground(
+            await pipeline.process(
                 jobID: jobID,
                 items: snapshot,
                 provider: provider,
@@ -761,7 +723,7 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func flushBufferToMainActor(jobID: TranslationJob.ID, buffer: ProcessingBuffer) async {
+    private func flushBufferToMainActor(jobID: TranslationJob.ID, buffer: TranslationJobProcessingBuffer) async {
         let updates = await buffer.drain(jobID: jobID)
         guard !updates.isEmpty else { return }
         await MainActor.run { [weak self] in
@@ -778,129 +740,9 @@ final class TranslationJobStore: ObservableObject, @unchecked Sendable {
         }
     }
 
-    nonisolated private func processItemsOnBackground(
-        jobID: TranslationJob.ID,
-        items: [TranslationJobItem],
-        provider: AIProviderConfig,
-        aiTextService: AITextService,
-        buffer: ProcessingBuffer
-    ) async {
-        let gate = ConcurrencyGate(max: Self.maxConcurrency)
-        await withTaskGroup(of: Void.self) { group in
-            for item in items {
-                if Task.isCancelled { return }
-                await gate.enter()
-                if Task.isCancelled {
-                    await gate.leave()
-                    return
-                }
-                group.addTask {
-                    await self.processItemOffMain(
-                        jobID: jobID,
-                        item: item,
-                        provider: provider,
-                        aiTextService: aiTextService,
-                        buffer: buffer
-                    )
-                    await gate.leave()
-                }
-            }
-        }
-    }
-
-    nonisolated private func processItemOffMain(
-        jobID: TranslationJob.ID,
-        item: TranslationJobItem,
-        provider: AIProviderConfig,
-        aiTextService: AITextService,
-        buffer: ProcessingBuffer
-    ) async {
-        guard !Task.isCancelled else { return }
-        var currentStatus = item.status
-
-        if currentStatus == .pendingEvaluation {
-            await buffer.record(jobID: jobID, update: ItemUpdate(
-                itemID: item.id, status: .evaluating,
-                translatedChinese: nil, errorMessage: nil
-            ))
-
-            do {
-                let results = try await retry(maxRetries: Self.maxRetryCount) {
-                    try await aiTextService.evaluateSentenceValue([item.targetEnglish], using: provider)
-                }
-                guard let isValuable = results.first else {
-                    throw AITextServiceError.emptyResponse
-                }
-                guard !Task.isCancelled else { return }
-                if isValuable {
-                    currentStatus = .pending
-                    await buffer.record(jobID: jobID, update: ItemUpdate(
-                        itemID: item.id, status: .pending,
-                        translatedChinese: nil, errorMessage: nil
-                    ))
-                } else {
-                    await buffer.record(jobID: jobID, update: ItemUpdate(
-                        itemID: item.id, status: .discarded,
-                        translatedChinese: nil, errorMessage: nil
-                    ))
-                    return
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await buffer.record(jobID: jobID, update: ItemUpdate(
-                    itemID: item.id, status: .evaluationFailed,
-                    translatedChinese: nil, errorMessage: error.localizedDescription
-                ))
-                return
-            }
-        }
-
-        if currentStatus != .pending { return }
-        if Task.isCancelled { return }
-
-        await buffer.record(jobID: jobID, update: ItemUpdate(
-            itemID: item.id, status: .translating,
-            translatedChinese: nil, errorMessage: nil
-        ))
-
-        do {
-            let translations = try await retry(maxRetries: Self.maxRetryCount) {
-                try await aiTextService.translateEnglishToChinese([item.targetEnglish], using: provider)
-            }
-            let translation = translations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if translation.isEmpty { throw AITextServiceError.emptyResponse }
-            guard !Task.isCancelled else { return }
-            await buffer.record(jobID: jobID, update: ItemUpdate(
-                itemID: item.id, status: .translated,
-                translatedChinese: translation, errorMessage: nil
-            ))
-        } catch {
-            guard !Task.isCancelled else { return }
-            await buffer.record(jobID: jobID, update: ItemUpdate(
-                itemID: item.id, status: .failed,
-                translatedChinese: nil, errorMessage: error.localizedDescription
-            ))
-        }
-    }
-
-    nonisolated private func retry<T>(maxRetries: Int, operation: () async throws -> T) async throws -> T {
-        var lastError: Error?
-        for attempt in 0..<maxRetries {
-            do {
-                return try await operation()
-            } catch {
-                lastError = error
-                if attempt < maxRetries - 1 {
-                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
-                }
-            }
-        }
-        throw lastError ?? AITextServiceError.invalidResponse
-    }
-
     // MARK: - Completion (runs on MainActor)
 
-    private func finishJob(jobID: TranslationJob.ID, buffer: ProcessingBuffer) async {
+    private func finishJob(jobID: TranslationJob.ID, buffer: TranslationJobProcessingBuffer) async {
         let pendingUpdates = await buffer.drain(jobID: jobID)
         if !pendingUpdates.isEmpty {
             applyUpdates(jobID: jobID, updates: pendingUpdates)
@@ -977,26 +819,4 @@ private func updateItem(
 ) {
     guard let index = job.items.firstIndex(where: { $0.id == itemID }) else { return }
     mutate(&job.items[index])
-}
-
-private actor ConcurrencyGate {
-    private let max: Int
-    private var running = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    init(max: Int) { self.max = max }
-
-    func enter() async {
-        if running < max { running += 1; return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func leave() {
-        running -= 1
-        if let next = waiters.first {
-            waiters.removeFirst()
-            running += 1
-            next.resume()
-        }
-    }
 }

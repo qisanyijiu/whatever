@@ -20,7 +20,7 @@ struct AnswerMatcher {
         if stemmed(left) == stemmed(right) {
             return true
         }
-        return right.count >= 5 && levenshtein(left, right) <= 1
+        return right.count >= 5 && left.count >= right.count && levenshtein(left, right) <= 1
     }
 
     private func normalized(_ value: String) -> String {

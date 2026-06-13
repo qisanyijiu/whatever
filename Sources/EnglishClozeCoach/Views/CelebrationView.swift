@@ -41,7 +41,7 @@ struct CelebrationView: View {
                     .scaleEffect(isAnimating ? 1.12 : 0.82)
                     .opacity(isAnimating ? 1.0 : 0.65)
 
-                Text("完成")
+                Text(AppStrings.completed)
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(.primary)
                     .scaleEffect(isAnimating ? 1.0 : 0.94)
@@ -67,4 +67,10 @@ private struct ConfettiPiece: Identifiable {
     let color: Color
     let size: CGFloat
     let rotation: Double
+}
+
+struct CelebrationView_Previews: PreviewProvider {
+    static var previews: some View {
+        CelebrationView()
+    }
 }

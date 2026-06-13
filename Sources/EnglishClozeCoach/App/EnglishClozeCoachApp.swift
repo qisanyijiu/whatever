@@ -53,6 +53,7 @@ struct EnglishClozeCoachApp: App {
                 .disabled(sessionStore.currentUser == nil || !store.canGoBack)
 
                 Button("下一题") {
+                    recordSkipIfNeeded()
                     store.advance()
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [.command])
@@ -72,8 +73,17 @@ struct EnglishClozeCoachApp: App {
 
         if let user = sessionStore.currentUser {
             studyStore.load(for: user)
+            store.startCurrentDeckPractice(studyData: studyStore.data)
         } else {
             studyStore.clear()
         }
+    }
+
+    private func recordSkipIfNeeded() {
+        guard let item = store.selectedItem,
+              !store.isCompleted(item) else {
+            return
+        }
+        studyStore.recordSkip(item: item)
     }
 }

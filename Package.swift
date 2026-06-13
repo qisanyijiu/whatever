@@ -29,18 +29,17 @@ let package = Package(
         .executableTarget(
             name: "whatever",
             dependencies: ["EnglishClozeCoach"],
-            path: "Sources/EnglishClozeCoach/App",
-            swiftSettings: [
-                .unsafeFlags(["-enable-testing"])
-            ]
+            path: "Sources/EnglishClozeCoach/App"
         ),
         .executableTarget(
             name: "EnglishClozeCoachUnitTests",
             dependencies: ["EnglishClozeCoach"],
-            path: "Tests/EnglishClozeCoachUnitTests",
-            swiftSettings: [
-                .unsafeFlags(["-enable-testing"])
-            ]
+            path: "Tests/EnglishClozeCoachUnitTests"
+        ),
+        .testTarget(
+            name: "EnglishClozeCoachTests",
+            dependencies: ["EnglishClozeCoach"],
+            path: "Tests/EnglishClozeCoachTests"
         )
     ]
 )

@@ -1,6 +1,7 @@
 import Foundation
 
-final class UserSessionStore: ObservableObject {
+@MainActor
+final class UserSessionStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var accounts: [UserAccount]
     @Published private(set) var currentUser: UserAccount?
     @Published var authError: String?

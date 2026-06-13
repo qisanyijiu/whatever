@@ -156,15 +156,7 @@ final class ShadowingRecorderService: ObservableObject {
     }
 
     private func recordingsDirectory() throws -> URL {
-        let baseURL = (try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? fileManager.homeDirectoryForCurrentUser
-
-        let directory = baseURL
-            .appendingPathComponent("whatever", isDirectory: true)
+        let directory = ApplicationSupport.directory(fileManager: fileManager)
             .appendingPathComponent("Recordings", isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory

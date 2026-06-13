@@ -1,6 +1,7 @@
 import Foundation
 
-final class PracticeStore: ObservableObject {
+@MainActor
+final class PracticeStore: ObservableObject, @unchecked Sendable {
     enum AnswerState {
         case idle
         case correct
@@ -19,6 +20,7 @@ final class PracticeStore: ObservableObject {
     private let library: PracticeLibrary
     private let importer: QuestionImporter
     private let answerMatcher: AnswerMatcher
+    private let sessionScheduler = PracticeSessionScheduler()
     private let explanationService = AnswerExplanationService()
 
     init(
@@ -77,30 +79,44 @@ final class PracticeStore: ObservableObject {
         selectedIndex < items.count - 1
     }
 
-    func selectDeck(_ deckID: PracticeDeck.ID) {
+    func selectDeck(_ deckID: PracticeDeck.ID, studyData: UserStudyData? = nil) {
         guard let deck = decks.first(where: { $0.id == deckID }) else {
             return
         }
 
         selectedDeckID = deck.id
         currentPracticeTitle = deck.name
-        items = deck.items
-        selectedItemID = deck.items.first?.id
+        items = orderedItems(deck.items, studyData: studyData)
+        selectedItemID = items.first?.id
         clearAnswers()
         refreshLibrarySummaries()
     }
 
-    func startCustomPractice(items newItems: [PracticeItem], title: String) {
-        items = newItems
+    func startCurrentDeckPractice(studyData: UserStudyData) {
+        guard let selectedDeckID else {
+            return
+        }
+        selectDeck(selectedDeckID, studyData: studyData)
+    }
+
+    func startCustomPractice(items newItems: [PracticeItem], title: String, studyData: UserStudyData? = nil) {
+        items = orderedItems(newItems, studyData: studyData)
         currentPracticeTitle = title
-        selectedItemID = newItems.first?.id
+        selectedItemID = items.first?.id
         clearAnswers()
     }
 
-    func returnToSelectedDeck() {
+    func returnToSelectedDeck(studyData: UserStudyData? = nil) {
         if let selectedDeckID {
-            selectDeck(selectedDeckID)
+            selectDeck(selectedDeckID, studyData: studyData)
         }
+    }
+
+    private func orderedItems(_ items: [PracticeItem], studyData: UserStudyData?) -> [PracticeItem] {
+        guard let studyData else {
+            return items
+        }
+        return sessionScheduler.orderedItems(items, studyData: studyData)
     }
 
     func prepareImportDraft(text: String, name: String, source: String) -> ImportDraft? {
@@ -519,15 +535,7 @@ final class PracticeStore: ObservableObject {
     }
 
     private func isLocalFileDeck(_ deck: PracticeDeck) -> Bool {
-        if deck.name == "本地文件题库" || deck.source.contains("本地文件") || deck.source.contains("英文文件") {
-            return true
-        }
-
-        let lowercasedSource = deck.source.lowercased()
-        return [
-            ".txt", ".text", ".md", ".markdown", ".srt", ".vtt", ".html", ".htm",
-            ".csv", ".tsv", ".json", ".jsonl", ".log", ".sub", ".sbv", ".ass", ".ssa"
-        ].contains { lowercasedSource.hasSuffix($0) }
+        PracticeLibraryOrigin.inferred(name: deck.name, detail: deck.source) == .localFile
     }
 
     private func remappedBlankIDs(in segments: [ClozeSegment], itemID: PracticeItem.ID) -> [ClozeSegment] {

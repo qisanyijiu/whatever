@@ -298,13 +298,7 @@ struct PracticeLibrary: @unchecked Sendable {
     }
 
     static func defaultApplicationSupportDirectory(fileManager: FileManager = .default) throws -> URL {
-        let baseURL = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
-        return baseURL.appendingPathComponent("whatever", isDirectory: true)
+        try ApplicationSupport.requiredDirectory(fileManager: fileManager)
     }
 
     private func legacyApplicationSupportDirectory() throws -> URL {
@@ -318,13 +312,7 @@ struct PracticeLibrary: @unchecked Sendable {
     }
 
     static func defaultLegacyApplicationSupportDirectory(fileManager: FileManager = .default) throws -> URL {
-        let baseURL = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
-        return baseURL.appendingPathComponent("EnglishClozeCoach", isDirectory: true)
+        try ApplicationSupport.legacyDirectory(fileManager: fileManager)
     }
 }
 

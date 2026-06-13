@@ -91,9 +91,11 @@ struct ClozeGenerator {
         return segments
     }
 
+    private static let wordRegex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
+
     private func wordMatches(in sentence: String) -> [WordMatch] {
         let nsSentence = sentence as NSString
-        let regex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
+        let regex = Self.wordRegex
         let matches = regex.matches(
             in: sentence,
             range: NSRange(location: 0, length: nsSentence.length)
@@ -111,6 +113,8 @@ struct ClozeGenerator {
         }
     }
 
+    // Target: ~1 blank per 7 words, with min 1 and max 3 blanks per sentence.
+    // Words shorter than 4 characters or in the stop-words list are excluded from blank selection.
     private func selectBlankWords(from words: [WordMatch]) -> [WordMatch] {
         let targetCount = min(3, max(1, words.count / 7 + 1))
         var selected: [WordMatch] = []

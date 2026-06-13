@@ -6,6 +6,7 @@ struct UserStudyData: Hashable, Codable {
     var history: [PracticeHistoryEntry]
     var mistakes: [MistakeRecord]
     var reviewStates: [PracticeReviewState]
+    var behaviorMetrics: [PracticeBehaviorMetrics]
     var dailyGoal: Int
     var reminderEnabled: Bool
     var reminderHour: Int
@@ -19,6 +20,7 @@ struct UserStudyData: Hashable, Codable {
             history: [],
             mistakes: [],
             reviewStates: [],
+            behaviorMetrics: [],
             dailyGoal: 10,
             reminderEnabled: false,
             reminderHour: 20,
@@ -33,6 +35,7 @@ struct UserStudyData: Hashable, Codable {
         case history
         case mistakes
         case reviewStates
+        case behaviorMetrics
         case dailyGoal
         case reminderEnabled
         case reminderHour
@@ -46,6 +49,7 @@ struct UserStudyData: Hashable, Codable {
         history: [PracticeHistoryEntry],
         mistakes: [MistakeRecord],
         reviewStates: [PracticeReviewState],
+        behaviorMetrics: [PracticeBehaviorMetrics],
         dailyGoal: Int,
         reminderEnabled: Bool,
         reminderHour: Int,
@@ -57,6 +61,7 @@ struct UserStudyData: Hashable, Codable {
         self.history = history
         self.mistakes = mistakes
         self.reviewStates = reviewStates
+        self.behaviorMetrics = behaviorMetrics
         self.dailyGoal = dailyGoal
         self.reminderEnabled = reminderEnabled
         self.reminderHour = reminderHour
@@ -71,6 +76,7 @@ struct UserStudyData: Hashable, Codable {
         self.history = try container.decodeIfPresent([PracticeHistoryEntry].self, forKey: .history) ?? []
         self.mistakes = try container.decodeIfPresent([MistakeRecord].self, forKey: .mistakes) ?? []
         self.reviewStates = try container.decodeIfPresent([PracticeReviewState].self, forKey: .reviewStates) ?? []
+        self.behaviorMetrics = try container.decodeIfPresent([PracticeBehaviorMetrics].self, forKey: .behaviorMetrics) ?? []
         self.dailyGoal = try container.decodeIfPresent(Int.self, forKey: .dailyGoal) ?? 10
         self.reminderEnabled = try container.decodeIfPresent(Bool.self, forKey: .reminderEnabled) ?? false
         self.reminderHour = try container.decodeIfPresent(Int.self, forKey: .reminderHour) ?? 20
@@ -109,4 +115,34 @@ struct PracticeReviewState: Identifiable, Hashable, Codable {
     var lastReviewedAt: Date?
     var consecutiveCorrect: Int
     var lapseCount: Int
+}
+
+struct PracticeBehaviorMetrics: Identifiable, Hashable, Codable {
+    let id: String
+    let itemID: PracticeItem.ID
+    var hintViewCount: Int
+    var skipCount: Int
+    var spellingErrorCount: Int
+    var completionCount: Int
+    var timingSampleCount: Int
+    var averageSecondsPerLetter: Double
+    var averageWordStartDelay: Double
+    var lastPracticedAt: Date?
+    var updatedAt: Date
+
+    static func empty(itemID: PracticeItem.ID, now: Date = Date()) -> PracticeBehaviorMetrics {
+        PracticeBehaviorMetrics(
+            id: itemID,
+            itemID: itemID,
+            hintViewCount: 0,
+            skipCount: 0,
+            spellingErrorCount: 0,
+            completionCount: 0,
+            timingSampleCount: 0,
+            averageSecondsPerLetter: 0,
+            averageWordStartDelay: 0,
+            lastPracticedAt: nil,
+            updatedAt: now
+        )
+    }
 }

@@ -1,6 +1,7 @@
 import Foundation
 
-final class StudyStore: ObservableObject {
+@MainActor
+final class StudyStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var data = UserStudyData.empty(userID: "")
     @Published private(set) var saveError: String?
 
@@ -49,7 +50,8 @@ final class StudyStore: ObservableObject {
         var streak = 0
         while completedDays.contains(day) {
             streak += 1
-            day = calendar.date(byAdding: .day, value: -1, to: day)!
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
+            day = previous
         }
         return streak
     }
@@ -60,12 +62,12 @@ final class StudyStore: ObservableObject {
         }
         .mapValues(\.count)
 
-        return (0..<7).map { offset in
-            let date = calendar.date(
+        return (0..<7).compactMap { offset in
+            guard let date = calendar.date(
                 byAdding: .day,
                 value: offset - 6,
                 to: calendar.startOfDay(for: Date())
-            )!
+            ) else { return nil }
 
             return WeeklyStudySummary(
                 id: ISO8601DateFormatter().string(from: date),
@@ -133,8 +135,9 @@ final class StudyStore: ObservableObject {
 
     func updateReminderTime(_ date: Date) {
         let components = calendar.dateComponents([.hour, .minute], from: date)
-        data.reminderHour = components.hour!
-        data.reminderMinute = components.minute!
+        guard let hour = components.hour, let minute = components.minute else { return }
+        data.reminderHour = hour
+        data.reminderMinute = minute
         save()
         reminderService.syncDailyReminder(
             enabled: data.reminderEnabled,
@@ -211,6 +214,9 @@ final class StudyStore: ObservableObject {
             )
         }
 
+        updateBehaviorMetric(itemID: item.id) { metric in
+            metric.spellingErrorCount += 1
+        }
         scheduleBackgroundSave()
     }
 
@@ -233,12 +239,73 @@ final class StudyStore: ObservableObject {
         )
 
         updateReviewState(itemID: item.id, wrongBlankCount: wrongBlankCount)
+        updateBehaviorMetric(itemID: item.id) { metric in
+            metric.completionCount += 1
+            metric.lastPracticedAt = Date()
+        }
 
         if data.history.count > 100 {
             data.history = Array(data.history.prefix(100))
         }
 
         scheduleBackgroundSave()
+    }
+
+    func recordHintViewed(item: PracticeItem) {
+        guard currentUserID != nil else {
+            return
+        }
+
+        updateBehaviorMetric(itemID: item.id) { metric in
+            metric.hintViewCount += 1
+            metric.lastPracticedAt = Date()
+        }
+        scheduleBackgroundSave()
+    }
+
+    func recordSkip(item: PracticeItem) {
+        guard currentUserID != nil else {
+            return
+        }
+
+        updateBehaviorMetric(itemID: item.id) { metric in
+            metric.skipCount += 1
+            metric.lastPracticedAt = Date()
+        }
+        scheduleBackgroundSave()
+    }
+
+    func recordInputTiming(
+        item: PracticeItem,
+        secondsPerLetter: TimeInterval,
+        wordStartDelay: TimeInterval
+    ) {
+        guard currentUserID != nil else {
+            return
+        }
+
+        let clampedSecondsPerLetter = min(30, max(0, secondsPerLetter))
+        let clampedWordStartDelay = min(120, max(0, wordStartDelay))
+        updateBehaviorMetric(itemID: item.id) { metric in
+            let sampleCount = Double(metric.timingSampleCount)
+            metric.averageSecondsPerLetter = weightedAverage(
+                currentAverage: metric.averageSecondsPerLetter,
+                sampleCount: sampleCount,
+                newValue: clampedSecondsPerLetter
+            )
+            metric.averageWordStartDelay = weightedAverage(
+                currentAverage: metric.averageWordStartDelay,
+                sampleCount: sampleCount,
+                newValue: clampedWordStartDelay
+            )
+            metric.timingSampleCount += 1
+            metric.lastPracticedAt = Date()
+        }
+        scheduleBackgroundSave()
+    }
+
+    private func dueDate(days: Int, from date: Date) -> Date {
+        Calendar.current.date(byAdding: .day, value: days, to: date) ?? date
     }
 
     private func updateReviewState(itemID: PracticeItem.ID, wrongBlankCount: Int) {
@@ -249,13 +316,13 @@ final class StudyStore: ObservableObject {
                 data.reviewStates[index].ease = min(3.0, data.reviewStates[index].ease + 0.12)
                 let nextInterval = max(1, Int(Double(max(1, data.reviewStates[index].intervalDays)) * data.reviewStates[index].ease))
                 data.reviewStates[index].intervalDays = nextInterval
-                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: nextInterval, to: now)!
+                data.reviewStates[index].dueAt = dueDate(days: nextInterval, from: now)
             } else {
                 data.reviewStates[index].lapseCount += 1
                 data.reviewStates[index].consecutiveCorrect = 0
                 data.reviewStates[index].ease = max(1.3, data.reviewStates[index].ease - 0.2)
                 data.reviewStates[index].intervalDays = 1
-                data.reviewStates[index].dueAt = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+                data.reviewStates[index].dueAt = dueDate(days: 1, from: now)
             }
             data.reviewStates[index].lastReviewedAt = now
         } else {
@@ -266,13 +333,41 @@ final class StudyStore: ObservableObject {
                     itemID: itemID,
                     ease: wrongBlankCount == 0 ? 2.2 : 1.6,
                     intervalDays: firstInterval,
-                    dueAt: Calendar.current.date(byAdding: .day, value: firstInterval, to: now)!,
+                    dueAt: dueDate(days: firstInterval, from: now),
                     lastReviewedAt: now,
                     consecutiveCorrect: wrongBlankCount == 0 ? 1 : 0,
                     lapseCount: wrongBlankCount == 0 ? 0 : 1
                 )
             )
         }
+    }
+
+    private func updateBehaviorMetric(
+        itemID: PracticeItem.ID,
+        update: (inout PracticeBehaviorMetrics) -> Void
+    ) {
+        let now = Date()
+        let index: Int
+        if let existingIndex = data.behaviorMetrics.firstIndex(where: { $0.itemID == itemID }) {
+            index = existingIndex
+        } else {
+            data.behaviorMetrics.append(.empty(itemID: itemID, now: now))
+            index = data.behaviorMetrics.count - 1
+        }
+
+        update(&data.behaviorMetrics[index])
+        data.behaviorMetrics[index].updatedAt = now
+    }
+
+    private func weightedAverage(
+        currentAverage: Double,
+        sampleCount: Double,
+        newValue: Double
+    ) -> Double {
+        guard sampleCount > 0 else {
+            return newValue
+        }
+        return (currentAverage * sampleCount + newValue) / (sampleCount + 1)
     }
 
     private var saveThrottleTask: Task<Void, Never>?

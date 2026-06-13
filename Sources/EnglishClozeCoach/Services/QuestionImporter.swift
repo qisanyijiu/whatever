@@ -75,9 +75,11 @@ struct QuestionImporter {
         }
     }
 
+    private static let sentenceRegex = try! NSRegularExpression(pattern: #"[^.!?\n]+[.!?]?"#)
+
     private func splitSentences(_ text: String) -> [String] {
         let nsText = text as NSString
-        let regex = try! NSRegularExpression(pattern: #"[^.!?\n]+[.!?]?"#)
+        let regex = Self.sentenceRegex
         let matches = regex.matches(
             in: text,
             range: NSRange(location: 0, length: nsText.length)

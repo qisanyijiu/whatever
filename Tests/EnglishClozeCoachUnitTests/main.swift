@@ -180,6 +180,13 @@ let coreLearningTests: [UnitTest] = [
         try expect(!ImportDraft(name: "Draft", source: "unit", items: [draftItem]).id.isEmpty)
         try expectEqual(PlaceholderTranslationService().translate(english: "Hello"), "待翻译")
     },
+    UnitTest(name: "Dictation answers filter invalid characters and require exact words") {
+        try expectEqual(DictationAnswerRules.sanitizedInput("rea.dy!"), "ready")
+        try expectEqual(DictationAnswerRules.sanitizedInput("don’t?"), "don't")
+        try expect(!DictationAnswerRules.isExactMatch("read", answer: "ready"))
+        try expect(DictationAnswerRules.isExactMatch("Ready", answer: "ready"))
+        try expect(DictationAnswerRules.isExactMatch("don’t", answer: "don't"))
+    },
     UnitTest(name: "ClozeGenerator creates one-based blank IDs") {
         let itemID = "generated-item"
         let segments = ClozeGenerator().segments(
@@ -574,7 +581,70 @@ let coreLearningTests: [UnitTest] = [
         try expect(matcher.matches("meeting", answer: "meet"))
         try expect(matcher.matches("confidense", answer: "confidence"))
         try expect(!matcher.matches("", answer: "meet"))
+        try expect(!matcher.matches("read", answer: "ready"))
         try expect(!matcher.matches("coffee", answer: "document"))
+    },
+    UnitTest(name: "PracticeSessionScheduler prioritizes unfamiliar and due items") {
+        let scheduler = PracticeSessionScheduler()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let weakItem = sampleItem(id: "weak")
+        let familiarItem = sampleItem(id: "familiar")
+        var studyData = UserStudyData.empty(userID: "scheduler")
+        studyData.reviewStates = [
+            PracticeReviewState(
+                id: weakItem.id,
+                itemID: weakItem.id,
+                ease: 1.4,
+                intervalDays: 1,
+                dueAt: now.addingTimeInterval(-86_400),
+                lastReviewedAt: now.addingTimeInterval(-172_800),
+                consecutiveCorrect: 0,
+                lapseCount: 3
+            ),
+            PracticeReviewState(
+                id: familiarItem.id,
+                itemID: familiarItem.id,
+                ease: 2.8,
+                intervalDays: 12,
+                dueAt: now.addingTimeInterval(864_000),
+                lastReviewedAt: now,
+                consecutiveCorrect: 5,
+                lapseCount: 0
+            )
+        ]
+        studyData.behaviorMetrics = [
+            PracticeBehaviorMetrics(
+                id: weakItem.id,
+                itemID: weakItem.id,
+                hintViewCount: 4,
+                skipCount: 2,
+                spellingErrorCount: 6,
+                completionCount: 0,
+                timingSampleCount: 2,
+                averageSecondsPerLetter: 0.9,
+                averageWordStartDelay: 3.2,
+                lastPracticedAt: nil,
+                updatedAt: now
+            ),
+            PracticeBehaviorMetrics(
+                id: familiarItem.id,
+                itemID: familiarItem.id,
+                hintViewCount: 0,
+                skipCount: 0,
+                spellingErrorCount: 0,
+                completionCount: 8,
+                timingSampleCount: 3,
+                averageSecondsPerLetter: 0.2,
+                averageWordStartDelay: 0.3,
+                lastPracticedAt: now,
+                updatedAt: now
+            )
+        ]
+
+        let weakWeight = scheduler.priorityWeight(for: weakItem, studyData: studyData, now: now)
+        let familiarWeight = scheduler.priorityWeight(for: familiarItem, studyData: studyData, now: now)
+        try expect(weakWeight > familiarWeight)
+        try expectEqual(scheduler.orderedItems([weakItem], studyData: studyData, now: now).map(\.id), [weakItem.id])
     },
     UnitTest(name: "AnswerExplanationService uses one-based blank numbers") {
         let item = sampleItem()
@@ -1338,6 +1408,7 @@ let userStudyAndAITests: [UnitTest] = [
         try expect(!legacy.reminderEnabled)
         try expectEqual(legacy.reminderHour, 20)
         try expectEqual(legacy.reminderMinute, 0)
+        try expect(legacy.behaviorMetrics.isEmpty)
 
         let minimalLegacy = try JSONDecoder().decode(
             UserStudyData.self,
@@ -1348,6 +1419,7 @@ let userStudyAndAITests: [UnitTest] = [
         try expect(minimalLegacy.history.isEmpty)
         try expect(minimalLegacy.mistakes.isEmpty)
         try expect(minimalLegacy.reviewStates.isEmpty)
+        try expect(minimalLegacy.behaviorMetrics.isEmpty)
         try expectEqual(minimalLegacy.dailyGoal, 10)
     },
     UnitTest(name: "StudyStore records completion mistakes and review queues") {
@@ -1380,8 +1452,21 @@ let userStudyAndAITests: [UnitTest] = [
         studyStore.recordMistake(item: item, blank: item.blanks[0], wrongAnswer: "mate")
         try expectEqual(studyStore.frequentMistakes.first?.mistakeCount, 2)
         try expectEqual(studyStore.mistakeItems(from: [item]).map(\.id), [item.id])
+        try expectEqual(studyStore.data.behaviorMetrics.first?.spellingErrorCount, 2)
+
+        studyStore.recordHintViewed(item: item)
+        studyStore.recordSkip(item: item)
+        studyStore.recordInputTiming(item: item, secondsPerLetter: 0.7, wordStartDelay: 2.5)
+        var behaviorMetric = try require(studyStore.data.behaviorMetrics.first { $0.itemID == item.id })
+        try expectEqual(behaviorMetric.hintViewCount, 1)
+        try expectEqual(behaviorMetric.skipCount, 1)
+        try expectEqual(behaviorMetric.timingSampleCount, 1)
+        try expectEqual(behaviorMetric.averageSecondsPerLetter, 0.7)
+        try expectEqual(behaviorMetric.averageWordStartDelay, 2.5)
 
         studyStore.recordCompletion(item: item, wrongBlankCount: 1)
+        behaviorMetric = try require(studyStore.data.behaviorMetrics.first { $0.itemID == item.id })
+        try expectEqual(behaviorMetric.completionCount, 1)
         try expectEqual(studyStore.completedCount, 1)
         try expectEqual(studyStore.todayCompletedCount, 1)
         try expectEqual(studyStore.currentStreak, 1)

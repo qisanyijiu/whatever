@@ -2,11 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private struct SystemTranslatedDraft {
-    let draft: ImportDraft
-    let failedCount: Int
-}
-
 struct ImportView: View {
     @ObservedObject var store: PracticeStore
     @ObservedObject var aiStore: AIProviderStore
@@ -37,12 +32,23 @@ struct ImportView: View {
     @State private var systemTranslationTotalCount = 0
     @State private var systemTranslationFailureCount = 0
     @State private var activeTranslationRunID: UUID?
+    @State private var translationTask: Task<Void, Never>?
+    @State private var localDatabaseImportTask: Task<Void, Never>?
+    @State private var tedDownloadTask: Task<Void, Never>?
+    @State private var scriptDownloadTask: Task<Void, Never>?
 
     private let tedDownloader = TEDTranscriptDownloader()
     private let scriptDownloader = ScriptTextDownloader()
     private let folderImporter = FolderTextImporter()
     private let aiTextService = AITextService()
+    private let localDatabaseImportWorkflow = LocalFileDatabaseImportWorkflow()
     private let importBatchByteLimit = 512 * 1024
+
+    private var importableContentTypes: [UTType] {
+        [.plainText, .text] + FolderTextImporter.importableFileExtensions
+            .sorted()
+            .compactMap { UTType(filenameExtension: $0) }
+    }
 
     private var isDownloadingContent: Bool {
         isDownloadingTED
@@ -67,6 +73,12 @@ struct ImportView: View {
         }
         .padding(24)
         .frame(width: isPreviewing ? 860 : 760, height: isPreviewing ? 680 : 640)
+        .onDisappear {
+            translationTask?.cancel()
+            localDatabaseImportTask?.cancel()
+            tedDownloadTask?.cancel()
+            scriptDownloadTask?.cancel()
+        }
     }
 
     private var sourceContent: some View {
@@ -369,9 +381,7 @@ struct ImportView: View {
         panel.canChooseFiles = true
         panel.prompt = "选择多个文件"
         panel.message = "可一次选择多个英文文本、字幕或网页文本文件。"
-        let localTypes = ["srt", "vtt", "md", "markdown", "html", "htm", "text"]
-            .compactMap { UTType(filenameExtension: $0) }
-        panel.allowedContentTypes = [.plainText, .text] + localTypes
+        panel.allowedContentTypes = importableContentTypes
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else {
             return
@@ -423,9 +433,7 @@ struct ImportView: View {
         panel.canChooseFiles = true
         panel.prompt = "本地文件入库"
         panel.message = "选择后会直接生成题目并写入 SQLite 数据库。"
-        let localTypes = ["srt", "vtt", "md", "markdown", "html", "htm", "text"]
-            .compactMap { UTType(filenameExtension: $0) }
-        panel.allowedContentTypes = [.plainText, .text] + localTypes
+        panel.allowedContentTypes = importableContentTypes
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else {
             return
@@ -495,15 +503,26 @@ struct ImportView: View {
         systemTranslationTotalCount = draft.items.count
         message = "正在使用 macOS 系统翻译：0/\(draft.items.count)"
 
-        Task { @MainActor in
+        localDatabaseImportTask?.cancel()
+        localDatabaseImportTask = Task { @MainActor in
             defer {
                 finish()
                 systemTranslationCompletedCount = 0
                 systemTranslationTotalCount = 0
+                localDatabaseImportTask = nil
             }
 
             do {
-                let result = try await draftTranslatedWithSystemAPI(draft)
+                let result = try await localDatabaseImportWorkflow.translatedDraft(
+                    from: draft,
+                    systemTranslator: systemTranslator
+                ) { completedCount, totalCount, failedCount in
+                    systemTranslationCompletedCount = completedCount
+                    systemTranslationFailureCount = failedCount
+                    message = failedCount > 0
+                        ? "正在使用 macOS 系统翻译：\(completedCount)/\(totalCount)，失败 \(failedCount)"
+                        : "正在使用 macOS 系统翻译：\(completedCount)/\(totalCount)"
+                }
                 let count = store.saveImportDraft(result.draft)
                 if count > 0 {
                     if result.failedCount > 0 {
@@ -520,40 +539,6 @@ struct ImportView: View {
                 message = "macOS 系统翻译失败：\(error.localizedDescription)"
             }
         }
-    }
-
-    @MainActor
-    private func draftTranslatedWithSystemAPI(_ draft: ImportDraft) async throws -> SystemTranslatedDraft {
-        let sourceTexts = draft.items.map(\.targetEnglish)
-        var failedIndexes = Set<Int>()
-        let translations = try await systemTranslator.translateEnglishToSimplifiedChinese(
-            sourceTexts,
-            progress: { index, _ in
-                systemTranslationCompletedCount = min(index + 1, sourceTexts.count)
-                message = "正在使用 macOS 系统翻译：\(systemTranslationCompletedCount)/\(sourceTexts.count)"
-            },
-            failure: { index, _, _ in
-                failedIndexes.insert(index)
-                systemTranslationFailureCount = failedIndexes.count
-                systemTranslationCompletedCount = min(index + 1, sourceTexts.count)
-                message = "正在使用 macOS 系统翻译：\(systemTranslationCompletedCount)/\(sourceTexts.count)，失败 \(systemTranslationFailureCount)"
-            }
-        )
-        var translatedDraft = draft
-        var translatedItems: [ImportDraftItem] = []
-
-        for index in translatedDraft.items.indices where translations.indices.contains(index) {
-            let translation = translations[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !translation.isEmpty {
-                translatedDraft.items[index].sourceChinese = translation
-                translatedItems.append(translatedDraft.items[index])
-            } else {
-                failedIndexes.insert(index)
-            }
-        }
-        translatedDraft.items = translatedItems
-
-        return SystemTranslatedDraft(draft: translatedDraft, failedCount: failedIndexes.count)
     }
 
     private func generatePreview() {
@@ -623,7 +608,8 @@ struct ImportView: View {
             ? "正在使用 \(provider.name) 自动翻译中文提示：0/\(itemsToTranslate.count)"
             : "正在使用 \(provider.name) 翻译中文提示：0/\(itemsToTranslate.count)"
 
-        Task {
+        translationTask?.cancel()
+        translationTask = Task {
             var lastError: Error?
 
             for item in itemsToTranslate {
@@ -706,7 +692,8 @@ struct ImportView: View {
         isDownloadingTED = true
         message = "正在下载 TED 文稿..."
 
-        Task {
+        tedDownloadTask?.cancel()
+        tedDownloadTask = Task {
             do {
                 let transcript = try await tedDownloader.downloadTranscript(from: urlText)
                 await MainActor.run {
@@ -736,7 +723,8 @@ struct ImportView: View {
         isDownloadingScript = true
         message = "正在下载台词..."
 
-        Task {
+        scriptDownloadTask?.cancel()
+        scriptDownloadTask = Task {
             do {
                 let scriptText = try await scriptDownloader.downloadText(from: urlText)
                 await MainActor.run {

@@ -21,6 +21,7 @@ enum PracticeArchiveError: LocalizedError {
 struct PracticeArchiveService {
     static let fileExtension = "eccbin"
 
+    // File header: "ECCLIB1\0" — EnglishClozeCoach Library format v1
     private static let magic = Data([0x45, 0x43, 0x43, 0x4C, 0x49, 0x42, 0x31, 0x00])
     private static let saltLength = 16
 

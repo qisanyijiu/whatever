@@ -55,13 +55,6 @@ struct UserAccountLibrary: @unchecked Sendable {
     }
 
     static func defaultApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
-        let baseURL = (try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )) ?? fileManager.homeDirectoryForCurrentUser
-
-        return baseURL.appendingPathComponent("whatever", isDirectory: true)
+        ApplicationSupport.directory(fileManager: fileManager)
     }
 }

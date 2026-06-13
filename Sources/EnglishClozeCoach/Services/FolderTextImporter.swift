@@ -40,10 +40,12 @@ struct FolderTextImporter {
         }
     }
 
-    var supportedExtensions: Set<String> = [
+    static let importableFileExtensions: Set<String> = [
         "txt", "text", "md", "markdown", "srt", "vtt", "html", "htm",
         "csv", "tsv", "json", "jsonl", "log", "sub", "sbv", "ass", "ssa"
     ]
+
+    var supportedExtensions: Set<String> = FolderTextImporter.importableFileExtensions
     var fileManager: FileManager = .default
     var scriptTextDownloader: ScriptTextDownloader = ScriptTextDownloader()
 

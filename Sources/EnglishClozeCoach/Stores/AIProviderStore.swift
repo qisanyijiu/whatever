@@ -1,6 +1,7 @@
 import Foundation
 
-final class AIProviderStore: ObservableObject {
+@MainActor
+final class AIProviderStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var providers: [AIProviderConfig]
     @Published private(set) var activeProviderID: AIProviderConfig.ID?
     @Published private(set) var saveError: String?

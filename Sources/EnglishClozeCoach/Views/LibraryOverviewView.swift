@@ -170,7 +170,7 @@ struct LibraryOverviewView: View {
                             }
 
                             Button {
-                                store.selectDeck(summary.id)
+                                store.selectDeck(summary.id, studyData: studyStore.data)
                                 editingItemID = nil
                             } label: {
                                 Label("练习", systemImage: "play")
